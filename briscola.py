@@ -6,7 +6,7 @@ import numpy as np
 # --- 1. Configurazione Iniziale ---
 
 # !!! MODIFICA QUI I TUOI GIOCATORI !!!
-LISTA_GIOCATORI = ["Anna", "Bruno", "Carla", "Davide", "Elena", "Franco"]
+LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Esteban"]
 
 # Mappa dei punti base
 PUNTI_MAP = {

@@ -18,8 +18,8 @@ LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Nic
 
 # Mappa dei punti base
 PUNTI_MAP = {
-    2: 3,  # Vittoria in partita a 2
-    3: 5,  # Vittoria in partita a 3
+    2: 2,  # Vittoria in partita a 2
+    3: 3,  # Vittoria in partita a 3
     4: 2   # Vittoria in partita a 4 (per ciascun vincitore)
 }
 PUNTI_BONUS_100 = 0.5

@@ -99,27 +99,50 @@ def salva_log_gsheet(df):
 # --- 3. Funzioni di Logica del Torneo (MODIFICATE) ---
 
 def inizializza_stato():
-    """Inizializza lo stato: si connette a GSheets e carica il log."""
+    """
+    Inizializza lo stato in modo robusto. Crea sempre le variabili 
+    di default PRIMA di tentare la connessione.
+    """
     
-    if 'gs_worksheet' not in st.session_state:
-        st.session_state.gs_worksheet = connect_to_gsheet()
-
-    if 'log_caricato' not in st.session_state and st.session_state.gs_worksheet is not None:
-        st.session_state.log_partite = carica_log_gsheet(st.session_state.gs_worksheet)
-        st.session_state.log_caricato = True
-        
-        if 'classifica' not in st.session_state:
-            classifica_vuota = pd.DataFrame(
-                0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:]
-            )
-            classifica_vuota['PG'] = 0
-            classifica_vuota['Elo'] = ELO_STARTING # Imposta Elo iniziale
-            st.session_state.classifica = classifica_vuota.reset_index().rename(columns={'index': 'Giocatore'})
-        
-        ricalcola_classifica()
-
+    # 1. Inizializza la password (rimane invariato)
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
+
+    # 2. Inizializza il log VUOTO (se non esiste)
+    if 'log_partite' not in st.session_state:
+        st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
+    
+    # 3. Inizializza la classifica VUOTA (se non esiste)
+    # Questo è il fix principale: 'classifica' esisterà sempre.
+    if 'classifica' not in st.session_state:
+        classifica_vuota = pd.DataFrame(
+            0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:]
+        )
+        classifica_vuota['PG'] = 0
+        classifica_vuota['Elo'] = ELO_STARTING
+        st.session_state.classifica = classifica_vuota.reset_index().rename(columns={'index': 'Giocatore'})
+    
+    # 4. Inizializza gli stati di connessione (se non esistono)
+    if 'gs_worksheet' not in st.session_state:
+        st.session_state.gs_worksheet = None
+        
+    if 'log_caricato' not in st.session_state:
+        st.session_state.log_caricato = False
+
+    # 5. Ora, TENTA di connetterti e caricare i dati
+    # Prova a connetterti solo se non l'abbiamo già fatto
+    if st.session_state.gs_worksheet is None:
+        st.session_state.gs_worksheet = connect_to_gsheet() # Stampa un errore se fallisce
+    
+    # Prova a caricare il log solo se abbiamo una connessione E non l'abbiamo già caricato
+    if st.session_state.gs_worksheet is not None and not st.session_state.log_caricato:
+        st.session_state.log_partite = carica_log_gsheet(st.session_state.gs_worksheet)
+        st.session_state.log_caricato = True # Segna come caricato
+        ricalcola_classifica() # Ricalcola classifica CON i dati caricati
+    
+    # Se 'gs_worksheet' è None (connessione fallita), l'app 
+    # semplicemente andrà avanti con il log e la classifica vuoti creati ai passaggi 2 e 3.
+    # L'AttributeError è risolto.
         
 def reset_torneo():
     """Resetta il torneo CANCELLANDO i dati sul Foglio Google."""

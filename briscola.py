@@ -307,7 +307,7 @@ def main():
             st.session_state.select_vincitori = []
             st.session_state.check_bonus = False
 
-    # --- Sidebar (invariata) ---
+    # --- Sidebar ---
     with st.sidebar:
         st.header("📋 Registra Partita")
         
@@ -327,26 +327,32 @@ def main():
             "Registra Partita", use_container_width=True, type="primary", on_click=processa_registrazione
         )
         st.divider()
-        if st.button("🗑️ Elimina Ultima Partita", use_container_width=True):
-            if st.session_state.log_partite.empty:
-                st.sidebar.error("Nessuna partita da eliminare.")
-            else:
-                st.session_state.log_partite = st.session_state.log_partite.sort_values(by="data").iloc[:-1]
-                salva_log_gsheet(st.session_state.log_partite)
-                ricalcola_classifica()
-                st.sidebar.success("Ultima partita eliminata con successo.")
-                st.rerun()
 
-        if st.button("🚨 RESETTA TORNEO 🚨", use_container_width=True):
-            reset_torneo()
-            st.rerun()
+        # --- MODIFICA: Bottoni nascosti in un expander ---
+        with st.expander("⚠️ Opzioni Avanzate", expanded=False):
+            st.write("Azioni pericolose o di amministrazione.")
+            
+            if st.button("🗑️ Elimina Ultima Partita", use_container_width=True, help="Rimuove l'ultima partita registrata nel log"):
+                if st.session_state.log_partite.empty:
+                    st.sidebar.error("Nessuna partita da eliminare.")
+                else:
+                    # Assicura di rimuovere la più recente ordinando per data
+                    st.session_state.log_partite = st.session_state.log_partite.sort_values(by="data").iloc[:-1]
+                    salva_log_gsheet(st.session_state.log_partite)
+                    ricalcola_classifica()
+                    st.sidebar.success("Ultima partita eliminata con successo.")
+                    st.rerun()
+
+            if st.button("🚨 RESETTA TORNEO 🚨", use_container_width=True, help="Cancella TUTTE le partite e resetta le classifiche. Richiede nuovo login."):
+                reset_torneo()
+                st.rerun()
+        # --- FINE MODIFICA ---
 
     # --- PAGINA PRINCIPALE CON NUOVA UI ---
     st.title("🏆 Torneo di Briscola")
 
     tab_mpp, tab_elo = st.tabs(["📊 Classifica Torneo (MPP)", "👑 Classifica Rating (Elo)"])
     
-    # Prepara la classifica base (serve per i podi)
     classifica_base = st.session_state.classifica.copy()
     if 'PG' in classifica_base.columns and not classifica_base.empty:
         max_pg = int(classifica_base['PG'].max())
@@ -358,12 +364,10 @@ def main():
         st.header("📊 Classifica Torneo (MPP)")
         st.markdown("Ordinata per **MPP (Media Punti per Partita)**. Premia l'efficienza.")
 
-        # Calcola podio non filtrato
         classifica_mpp_podio = classifica_base.sort_values(
             by=["MPP", "PT", "PG"], ascending=[False, False, True]
         ).reset_index(drop=True)
 
-        # --- MODIFICA UI: PODIO (Top 3) ---
         col1, col2, col3 = st.columns(3)
         if len(classifica_mpp_podio) >= 1:
             r = classifica_mpp_podio.iloc[0]
@@ -376,15 +380,13 @@ def main():
             col3.metric("🥉 3° Posto", r['Giocatore'], f"{r['MPP']:.3f} MPP ({r['PG']} PG)")
         st.divider()
 
-        # --- MODIFICA LOGICA: Default value=2 ---
         soglia_pg = st.slider(
             "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
-            min_value=0, max_value=max_pg + 1, value=2, # <-- DEFAULT 2
+            min_value=0, max_value=max_pg + 1, value=2, # Default 2
             help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
             key="slider_mpp"
         )
         
-        # Filtra e mostra la tabella
         classifica_mpp_filtrata = classifica_base.copy()
         if soglia_pg > 0:
             classifica_mpp_filtrata = classifica_mpp_filtrata[classifica_mpp_filtrata['PG'] >= soglia_pg]
@@ -400,12 +402,10 @@ def main():
         st.header("👑 Classifica Rating (Elo)")
         st.markdown(f"Ordinata per **Rating Elo**. Misura la forza relativa (Start: {ELO_STARTING}, K-Factor: {ELO_K_FACTOR}).")
 
-        # Calcola podio non filtrato
         classifica_elo_podio = classifica_base.sort_values(
             by=["Elo", "MPP", "PG"], ascending=[False, False, True]
         ).reset_index(drop=True)
 
-        # --- MODIFICA UI: PODIO (Top 3) ---
         col1_e, col2_e, col3_e = st.columns(3)
         if len(classifica_elo_podio) >= 1:
             r = classifica_elo_podio.iloc[0]
@@ -418,15 +418,13 @@ def main():
             col3_e.metric("🥉 3° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
         st.divider()
         
-        # --- MODIFICA LOGICA: Default value=2 ---
         soglia_pg_elo = st.slider(
             "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
-            min_value=0, max_value=max_pg + 1, value=2, # <-- DEFAULT 2
+            min_value=0, max_value=max_pg + 1, value=2, # Default 2
             help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
             key="slider_elo"
         )
 
-        # Filtra e mostra la tabella
         classifica_elo_filtrata = classifica_base.copy()
         if soglia_pg_elo > 0:
             classifica_elo_filtrata = classifica_elo_filtrata[classifica_elo_filtrata['PG'] >= soglia_pg_elo]
@@ -437,7 +435,7 @@ def main():
             column_config={ "Elo": st.column_config.NumberColumn(format="%d"), "PT": st.column_config.NumberColumn(format="%.1f"), "MPP": st.column_config.NumberColumn(format="%.3f") }
         )
 
-    # --- MODIFICA UI: Log partite nascosto in un Expander ---
+    # --- Log partite nascosto in un Expander ---
     with st.expander("Mostra/Nascondi Log Partite Giocate", expanded=False):
         st.header("📜 Log Partite Giocate")
         if st.session_state.log_partite.empty:

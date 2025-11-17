@@ -9,7 +9,7 @@ import ast
 # --- 1. Configurazione Iniziale ---
 
 # INCOLLA QUI L'URL DEL TUO FOGLIO GOOGLE
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/..." # INCOLLA IL TUO URL
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea2DT-FlYmq_TjA4MFqdc1rr3GFj1MxpVfWm0MQxrQo/edit?gid=0#gid=0" # INCOLLA IL TUO URL
 
 # !!! MODIFICA QUI I TUOI GIOCATORI !!!
 LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Esteban"]

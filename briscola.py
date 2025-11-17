@@ -47,32 +47,32 @@ def connect_to_gsheet():
 def carica_log_gsheet(worksheet):
     """Carica il log dal Foglio Google."""
     try:
-        # Ottieni tutti i dati e caricali in un DataFrame
         df = get_as_dataframe(worksheet, evaluate_formulas=True, dtype_backend='pyarrow')
 
-        # Se il foglio è vuoto, df.columns sarà vuoto. Inizializziamo.
         if df.empty:
             df = pd.DataFrame(columns=COLONNE_LOG)
         
-        # Pulisci eventuali righe/colonne vuote
         df = df.dropna(how='all').dropna(axis=1, how='all')
 
-        # Ricostruisci le colonne se non esistono (primo avvio)
         if df.empty:
              df = pd.DataFrame(columns=COLONNE_LOG)
              
-        # Converti le colonne da stringhe a liste (Google Sheets salva le liste come stringhe)
         if 'giocatori' in df.columns and not df['giocatori'].empty:
             df['giocatori'] = df['giocatori'].apply(lambda x: ast.literal_eval(str(x)) if isinstance(x, str) and x.startswith('[') else x)
         if 'vincitori' in df.columns and not df['vincitori'].empty:
             df['vincitori'] = df['vincitori'].apply(lambda x: ast.literal_eval(str(x)) if isinstance(x, str) and x.startswith('[') else x)
         
-        # Assicura che le colonne numeriche siano numeriche
         for col in ['num_giocatori', 'punti_vittoria', 'punti_bonus']:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
         
-        # Assicura che le colonne del log esistano
+        # --- QUESTA È LA CORREZIONE CHIAVE ---
+        # Forziamo la colonna 'data' a essere un datetime
+        # errors='coerce' trasforma eventuali date non valide in NaT (Not a Time)
+        if 'data' in df.columns:
+            df['data'] = pd.to_datetime(df['data'], errors='coerce')
+        # --- FINE CORREZIONE ---
+
         for col in COLONNE_LOG:
             if col not in df.columns:
                 df[col] = pd.NA
@@ -83,7 +83,6 @@ def carica_log_gsheet(worksheet):
 
     except Exception as e:
         st.warning(f"Errore nel caricamento del log: {e}. Provo a creare un log vuoto.")
-        # Se c'è un errore (es. foglio vuoto o corrotto), crea un log vuoto
         return pd.DataFrame(columns=COLONNE_LOG)
 
 def salva_log_gsheet(df):
@@ -372,7 +371,7 @@ def main():
         st.info("Nessuna partita ancora registrata.")
     else:
         st.dataframe(
-            st.session_state.log_partite.sort_values(by="data", ascending=False).drop(columns=['data']), # Rimuoviamo la colonna data che non serve più
+            st.session_state.log_partite.sort_values(by="data", ascending=False), 
             use_container_width=True,
             column_config={
                 "data": st.column_config.DatetimeColumn("Data e Ora", format="DD/MM/YYYY - HH:mm"),

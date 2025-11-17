@@ -12,7 +12,7 @@ import ast
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/..." # INCOLLA IL TUO URL
 
 # !!! MODIFICA QUI I TUOI GIOCATORI !!!
-LISTA_GIOCATORI = ["Anna", "Bruno", "Carla", "Davide", "Elena", "Franco"]
+LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Esteban"]
 
 # --- MODIFICA: PUNTI BILANCIATI PER IL SISTEMA MPP ---
 # Come discusso: +2 per 1v1, +2 per 2v2, +3 per 1v1v1

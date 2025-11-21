@@ -9,14 +9,12 @@ import ast
 # --- 1. Configurazione Iniziale ---
 
 # INCOLLA QUI L'URL DEL TUO FOGLIO GOOGLE
-GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea2DT-FlYmq_TjA4MFqdc1rr3GFj1MxpVfWm0MQxrQo/edit?gid=0#gid=0" # INCOLLA IL TUO URL
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea2DT-FlYmq_TjA4MFqdc1rr3GFj1MxpVfWm0MQxrQo/edit?gid=0#gid=0"
 
 # !!! MODIFICA QUI I TUOI GIOCATORI !!!
 LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Esteban", "Giampaolo"]
 
-# --- MODIFICA: PUNTI BILANCIATI PER IL SISTEMA MPP ---
-# Come discusso: +2 per 1v1, +2 per 2v2, +3 per 1v1v1
-# Punti bilanciati per il sistema MPP
+# --- PUNTI BILANCIATI PER IL CALCOLO (PT) ---
 PUNTI_MAP = {
     2: 2,  # Vittoria in partita a 2
     3: 3,  # Vittoria in partita a 3
@@ -27,6 +25,9 @@ PUNTI_BONUS_100 = 0.5
 # Costanti Elo
 ELO_STARTING = 1000
 ELO_K_FACTOR = 32
+
+# Soglia per il Podio
+PODIO_MIN_PG = 20
 
 # Colonne
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
@@ -177,7 +178,7 @@ def ricalcola_classifica():
         st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
         return
 
-    # --- 1. Calcolo Sistema MPP (Aggregato) ---
+    # --- 1. Calcolo Sistema MPP (Aggregato - mantenuto nel backend) ---
     log_valido = log.dropna(subset=['giocatori', 'vincitori', 'data'])
     
     pg_counts = log_valido['giocatori'].explode().value_counts()
@@ -289,7 +290,6 @@ def registra_partita(giocatori_partita, vincitori_selezionati, bonus_attivo):
 # --- 4. Struttura dell'App Streamlit (MODIFICATA) ---
 
 def main():
-    # --- MODIFICA UI: Aggiunto icona ---
     st.set_page_config(page_title="Torneo Briscola", layout="wide", page_icon="🏆")
     
     inizializza_stato()
@@ -328,7 +328,6 @@ def main():
         )
         st.divider()
 
-        # --- MODIFICA: Bottoni nascosti in un expander ---
         with st.expander("⚠️ Opzioni Avanzate", expanded=False):
             st.write("Azioni pericolose o di amministrazione.")
             
@@ -336,7 +335,6 @@ def main():
                 if st.session_state.log_partite.empty:
                     st.sidebar.error("Nessuna partita da eliminare.")
                 else:
-                    # Assicura di rimuovere la più recente ordinando per data
                     st.session_state.log_partite = st.session_state.log_partite.sort_values(by="data").iloc[:-1]
                     salva_log_gsheet(st.session_state.log_partite)
                     ricalcola_classifica()
@@ -346,67 +344,27 @@ def main():
             if st.button("🚨 RESETTA TORNEO 🚨", use_container_width=True, help="Cancella TUTTE le partite e resetta le classifiche. Richiede nuovo login."):
                 reset_torneo()
                 st.rerun()
-        # --- FINE MODIFICA ---
 
-    # --- PAGINA PRINCIPALE CON NUOVA UI ---
-    st.title("🏆 Torneo di Briscola")
+    # --- PAGINA PRINCIPALE (SOLO ELO) ---
+    st.title("🏆 Classifica Briscola (Elo)")
+    st.markdown(f"Classifica basata sul sistema **Rating Elo** (Start: {ELO_STARTING}, K-Factor: {ELO_K_FACTOR}).")
 
-    tab_mpp, tab_elo = st.tabs(["📊 Classifica Torneo (MPP)", "👑 Classifica Rating (Elo)"])
-    
     classifica_base = st.session_state.classifica.copy()
     if 'PG' in classifica_base.columns and not classifica_base.empty:
         max_pg = int(classifica_base['PG'].max())
     else:
         max_pg = 0
 
-    # --- Tab 1: Classifica MPP (REVAMPED) ---
-    with tab_mpp:
-        st.header("📊 Classifica Torneo (MPP)")
-        st.markdown("Ordinata per **MPP (Media Punti per Partita)**. Premia l'efficienza.")
+    # --- PODIO (Solo Elo, PG >= 20) ---
+    classifica_elo_podio = classifica_base[classifica_base['PG'] >= PODIO_MIN_PG].sort_values(
+        by=["Elo", "MPP", "PG"], ascending=[False, False, True]
+    ).reset_index(drop=True)
 
-        classifica_mpp_podio = classifica_base.sort_values(
-            by=["MPP", "PT", "PG"], ascending=[False, False, True]
-        ).reset_index(drop=True)
-
-        col1, col2, col3 = st.columns(3)
-        if len(classifica_mpp_podio) >= 1:
-            r = classifica_mpp_podio.iloc[0]
-            col1.metric("🥇 1° Posto", r['Giocatore'], f"{r['MPP']:.3f} MPP ({r['PG']} PG)")
-        if len(classifica_mpp_podio) >= 2:
-            r = classifica_mpp_podio.iloc[1]
-            col2.metric("🥈 2° Posto", r['Giocatore'], f"{r['MPP']:.3f} MPP ({r['PG']} PG)")
-        if len(classifica_mpp_podio) >= 3:
-            r = classifica_mpp_podio.iloc[2]
-            col3.metric("🥉 3° Posto", r['Giocatore'], f"{r['MPP']:.3f} MPP ({r['PG']} PG)")
-        st.divider()
-
-        soglia_pg = st.slider(
-            "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
-            min_value=0, max_value=max_pg + 1, value=2, # Default 2
-            help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
-            key="slider_mpp"
-        )
-        
-        classifica_mpp_filtrata = classifica_base.copy()
-        if soglia_pg > 0:
-            classifica_mpp_filtrata = classifica_mpp_filtrata[classifica_mpp_filtrata['PG'] >= soglia_pg]
-        
-        st.dataframe(
-            classifica_mpp_filtrata.sort_values(by=["MPP", "PT", "PG"], ascending=[False, False, True]), 
-            use_container_width=True,
-            column_config={ "PT": st.column_config.NumberColumn(format="%.1f"), "MPP": st.column_config.NumberColumn(format="%.3f"), "Elo": st.column_config.NumberColumn(format="%d") }
-        )
-
-    # --- Tab 2: Classifica Elo (REVAMPED) ---
-    with tab_elo:
-        st.header("👑 Classifica Rating (Elo)")
-        st.markdown(f"Ordinata per **Rating Elo**. Misura la forza relativa (Start: {ELO_STARTING}, K-Factor: {ELO_K_FACTOR}).")
-
-        classifica_elo_podio = classifica_base.sort_values(
-            by=["Elo", "MPP", "PG"], ascending=[False, False, True]
-        ).reset_index(drop=True)
-
-        col1_e, col2_e, col3_e = st.columns(3)
+    col1_e, col2_e, col3_e = st.columns(3)
+    
+    if classifica_elo_podio.empty:
+        st.info(f"Nessun giocatore ha ancora raggiunto {PODIO_MIN_PG} partite per il podio.")
+    else:
         if len(classifica_elo_podio) >= 1:
             r = classifica_elo_podio.iloc[0]
             col1_e.metric("🥇 1° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
@@ -416,24 +374,33 @@ def main():
         if len(classifica_elo_podio) >= 3:
             r = classifica_elo_podio.iloc[2]
             col3_e.metric("🥉 3° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
-        st.divider()
-        
-        soglia_pg_elo = st.slider(
-            "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
-            min_value=0, max_value=max_pg + 1, value=2, # Default 2
-            help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
-            key="slider_elo"
-        )
+    
+    st.divider()
+    
+    # --- TABELLA (Filtro Slider, default 2) ---
+    soglia_pg_elo = st.slider(
+        "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
+        min_value=0, max_value=max_pg + 1, value=2, # Default 2
+        help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
+        key="slider_elo"
+    )
 
-        classifica_elo_filtrata = classifica_base.copy()
-        if soglia_pg_elo > 0:
-            classifica_elo_filtrata = classifica_elo_filtrata[classifica_elo_filtrata['PG'] >= soglia_pg_elo]
+    classifica_elo_filtrata = classifica_base.copy()
+    if soglia_pg_elo > 0:
+        classifica_elo_filtrata = classifica_elo_filtrata[classifica_elo_filtrata['PG'] >= soglia_pg_elo]
 
-        st.dataframe(
-            classifica_elo_filtrata.sort_values(by=["Elo", "MPP", "PG"], ascending=[False, False, True]), 
-            use_container_width=True,
-            column_config={ "Elo": st.column_config.NumberColumn(format="%d"), "PT": st.column_config.NumberColumn(format="%.1f"), "MPP": st.column_config.NumberColumn(format="%.3f") }
-        )
+    # Visualizza solo le colonne rilevanti (Nasconde MPP se non desiderato, ma lascio PT per riferimento)
+    st.dataframe(
+        classifica_elo_filtrata.sort_values(by=["Elo", "PG"], ascending=[False, True]), 
+        use_container_width=True,
+        column_config={
+            "Elo": st.column_config.NumberColumn(format="%d"), 
+            "PT": st.column_config.NumberColumn("Punti Totali", format="%.1f"), 
+            "PG": st.column_config.NumberColumn("Partite Giocate"),
+            # Nascondiamo MPP dalla tabella visuale se non richiesto, o lo lasciamo per completezza
+            "MPP": st.column_config.NumberColumn(format="%.3f") 
+        }
+    )
 
     # --- Log partite nascosto in un Expander ---
     with st.expander("Mostra/Nascondi Log Partite Giocate", expanded=False):

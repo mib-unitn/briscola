@@ -25,7 +25,7 @@ PUNTI_BONUS_100 = 0.5
 
 # Costanti Elo
 ELO_STARTING = 1000
-ELO_K_FACTOR = 32
+ELO_K_FACTOR = 48
 
 # Soglia per il Podio
 PODIO_MIN_PG = 20

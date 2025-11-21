@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import gspread
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
@@ -115,6 +115,10 @@ def inizializza_stato():
         classifica_vuota['Elo'] = ELO_STARTING
         st.session_state.classifica = classifica_vuota.reset_index().rename(columns={'index': 'Giocatore'})
     
+    # --- NUOVO: Stato per lo storico Elo ---
+    if 'elo_history' not in st.session_state:
+        st.session_state.elo_history = {} # Dizionario {Giocatore: DataFrame}
+
     if 'gs_worksheet' not in st.session_state:
         st.session_state.gs_worksheet = None
         
@@ -141,6 +145,9 @@ def reset_torneo():
     }).set_index('Giocatore')
     st.session_state.classifica = classifica_vuota.reset_index()
     
+    # Resetta anche lo storico
+    st.session_state.elo_history = {}
+    
     st.session_state["password_correct"] = False
     st.sidebar.success("Torneo resettato.")
 
@@ -165,7 +172,7 @@ def check_password():
     return False
 
 def ricalcola_classifica():
-    """Ricalcola l'intera classifica (MPP e ELO) basandosi sul log."""
+    """Ricalcola l'intera classifica e lo STORICO ELO."""
     log = st.session_state.get('log_partite', pd.DataFrame(columns=COLONNE_LOG))
     
     classifica_nuova = pd.DataFrame(
@@ -174,11 +181,24 @@ def ricalcola_classifica():
     classifica_nuova['PG'] = 0
     classifica_nuova['Elo'] = ELO_STARTING
     
+    # --- Preparazione per lo storico ---
+    # Creiamo un dizionario di liste per tracciare la storia: {Giocatore: [{'Date': d, 'Elo': 1000}, ...]}
+    # Inseriamo un punto di partenza fittizio per il grafico
+    start_date = datetime.now()
+    if not log.empty and not log['data'].isnull().all():
+        try:
+            start_date = log['data'].min() - timedelta(days=1)
+        except:
+            pass # Usa default datetime.now se fallisce
+
+    elo_history_dict = {p: [{'Data': start_date, 'Elo': ELO_STARTING}] for p in LISTA_GIOCATORI}
+
     if log.empty or log.dropna(subset=['data']).empty:
         st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
+        st.session_state.elo_history = elo_history_dict # Salva storico vuoto (solo start)
         return
 
-    # --- 1. Calcolo Sistema MPP (Aggregato - mantenuto nel backend) ---
+    # --- 1. Calcolo Sistema MPP ---
     log_valido = log.dropna(subset=['giocatori', 'vincitori', 'data'])
     
     pg_counts = log_valido['giocatori'].explode().value_counts()
@@ -207,6 +227,9 @@ def ricalcola_classifica():
         vincitori = partita.vincitori
         perdenti = [p for p in giocatori if p not in vincitori]
         num_g = partita.num_giocatori
+        
+        # Giocatori coinvolti in questa partita (per aggiornare lo storico)
+        giocatori_match = []
 
         try:
             if num_g == 2: # 1v1
@@ -217,6 +240,7 @@ def ricalcola_classifica():
                 delta = ELO_K_FACTOR * (1 - E_vinc)
                 elo_correnti[p_vinc] += delta
                 elo_correnti[p_perd] -= delta
+                giocatori_match = [p_vinc, p_perd]
 
             elif num_g == 4: # 2v2
                 R_team_vinc = (elo_correnti[vincitori[0]] + elo_correnti[vincitori[1]]) / 2
@@ -227,6 +251,7 @@ def ricalcola_classifica():
                 elo_correnti[vincitori[1]] += delta_team
                 elo_correnti[perdenti[0]] -= delta_team
                 elo_correnti[perdenti[1]] -= delta_team
+                giocatori_match = vincitori + perdenti
 
             elif num_g == 3: # 1v1v1
                 p_vinc = vincitori[0]
@@ -238,13 +263,23 @@ def ricalcola_classifica():
                 elo_correnti[p_vinc] += delta_totale
                 elo_correnti[p_perd1] -= delta_totale / 2
                 elo_correnti[p_perd2] -= delta_totale / 2
-        
-        except (KeyError, IndexError) as e:
-             st.warning(f"Errore nel processare una partita per Elo (giocatore non trovato o dati errati). Partita saltata.")
+                giocatori_match = [p_vinc, p_perd1, p_perd2]
+            
+            # --- Aggiornamento Storico per i giocatori coinvoti ---
+            for p in giocatori_match:
+                elo_history_dict[p].append({
+                    'Data': partita.data,
+                    'Elo': int(round(elo_correnti[p]))
+                })
+
+        except (KeyError, IndexError):
              continue
     
     classifica_nuova['Elo'] = classifica_nuova.index.map(elo_correnti).round(0).astype(int)
     st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
+    
+    # Salva lo storico nello stato
+    st.session_state.elo_history = elo_history_dict
 
 
 def registra_partita(giocatori_partita, vincitori_selezionati, bonus_attivo):
@@ -376,6 +411,42 @@ def main():
             col3_e.metric("🥉 3° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
     
     st.divider()
+
+    # --- NUOVA SEZIONE: GRAFICO ELO ---
+    st.subheader("📈 Analisi Storico Elo")
+    
+    # Seleziona i top 3 giocatori per default (se ci sono)
+    top_players = classifica_base.sort_values(by="Elo", ascending=False)['Giocatore'].head(3).tolist() if not classifica_base.empty else []
+    
+    players_to_plot = st.multiselect(
+        "Seleziona i giocatori da confrontare:",
+        options=LISTA_GIOCATORI,
+        default=top_players
+    )
+
+    if players_to_plot:
+        # Costruisci il DataFrame per il grafico
+        # Dobbiamo unire le storie dei vari giocatori
+        all_data = []
+        for p in players_to_plot:
+            if p in st.session_state.elo_history:
+                history = st.session_state.elo_history[p]
+                for record in history:
+                    all_data.append({'Giocatore': p, 'Data': record['Data'], 'Elo': record['Elo']})
+        
+        if all_data:
+            df_chart = pd.DataFrame(all_data)
+            st.line_chart(
+                df_chart, 
+                x="Data", 
+                y="Elo", 
+                color="Giocatore",
+                use_container_width=True
+            )
+        else:
+            st.info("Nessun dato storico disponibile per i giocatori selezionati.")
+    
+    st.divider()
     
     # --- TABELLA (Filtro Slider, default 2) ---
     soglia_pg_elo = st.slider(
@@ -389,7 +460,6 @@ def main():
     if soglia_pg_elo > 0:
         classifica_elo_filtrata = classifica_elo_filtrata[classifica_elo_filtrata['PG'] >= soglia_pg_elo]
 
-    # Visualizza solo le colonne rilevanti (Nasconde MPP se non desiderato, ma lascio PT per riferimento)
     st.dataframe(
         classifica_elo_filtrata.sort_values(by=["Elo", "PG"], ascending=[False, True]), 
         use_container_width=True,
@@ -397,7 +467,6 @@ def main():
             "Elo": st.column_config.NumberColumn(format="%d"), 
             "PT": st.column_config.NumberColumn("Punti Totali", format="%.1f"), 
             "PG": st.column_config.NumberColumn("Partite Giocate"),
-            # Nascondiamo MPP dalla tabella visuale se non richiesto, o lo lasciamo per completezza
             "MPP": st.column_config.NumberColumn(format="%.3f") 
         }
     )

@@ -5,6 +5,7 @@ import numpy as np
 import gspread
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import ast
+import altair as alt # <-- NUOVO IMPORT
 
 # --- 1. Configurazione Iniziale ---
 
@@ -115,9 +116,8 @@ def inizializza_stato():
         classifica_vuota['Elo'] = ELO_STARTING
         st.session_state.classifica = classifica_vuota.reset_index().rename(columns={'index': 'Giocatore'})
     
-    # --- NUOVO: Stato per lo storico Elo ---
     if 'elo_history' not in st.session_state:
-        st.session_state.elo_history = {} # Dizionario {Giocatore: DataFrame}
+        st.session_state.elo_history = {} 
 
     if 'gs_worksheet' not in st.session_state:
         st.session_state.gs_worksheet = None
@@ -145,7 +145,6 @@ def reset_torneo():
     }).set_index('Giocatore')
     st.session_state.classifica = classifica_vuota.reset_index()
     
-    # Resetta anche lo storico
     st.session_state.elo_history = {}
     
     st.session_state["password_correct"] = False
@@ -182,20 +181,18 @@ def ricalcola_classifica():
     classifica_nuova['Elo'] = ELO_STARTING
     
     # --- Preparazione per lo storico ---
-    # Creiamo un dizionario di liste per tracciare la storia: {Giocatore: [{'Date': d, 'Elo': 1000}, ...]}
-    # Inseriamo un punto di partenza fittizio per il grafico
     start_date = datetime.now()
     if not log.empty and not log['data'].isnull().all():
         try:
             start_date = log['data'].min() - timedelta(days=1)
         except:
-            pass # Usa default datetime.now se fallisce
+            pass 
 
     elo_history_dict = {p: [{'Data': start_date, 'Elo': ELO_STARTING}] for p in LISTA_GIOCATORI}
 
     if log.empty or log.dropna(subset=['data']).empty:
         st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
-        st.session_state.elo_history = elo_history_dict # Salva storico vuoto (solo start)
+        st.session_state.elo_history = elo_history_dict 
         return
 
     # --- 1. Calcolo Sistema MPP ---
@@ -218,7 +215,7 @@ def ricalcola_classifica():
         0
     ).round(3) 
 
-    # --- 2. Calcolo Sistema ELO (Sequenziale) ---
+    # --- 2. Calcolo Sistema ELO ---
     log_ordinato_elo = log_valido.sort_values(by="data", ascending=True)
     elo_correnti = classifica_nuova['Elo'].to_dict()
     
@@ -227,8 +224,6 @@ def ricalcola_classifica():
         vincitori = partita.vincitori
         perdenti = [p for p in giocatori if p not in vincitori]
         num_g = partita.num_giocatori
-        
-        # Giocatori coinvolti in questa partita (per aggiornare lo storico)
         giocatori_match = []
 
         try:
@@ -265,7 +260,6 @@ def ricalcola_classifica():
                 elo_correnti[p_perd2] -= delta_totale / 2
                 giocatori_match = [p_vinc, p_perd1, p_perd2]
             
-            # --- Aggiornamento Storico per i giocatori coinvoti ---
             for p in giocatori_match:
                 elo_history_dict[p].append({
                     'Data': partita.data,
@@ -277,8 +271,6 @@ def ricalcola_classifica():
     
     classifica_nuova['Elo'] = classifica_nuova.index.map(elo_correnti).round(0).astype(int)
     st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
-    
-    # Salva lo storico nello stato
     st.session_state.elo_history = elo_history_dict
 
 
@@ -412,10 +404,9 @@ def main():
     
     st.divider()
 
-    # --- NUOVA SEZIONE: GRAFICO ELO ---
+    # --- GRAFICO ELO (Vincolato) ---
     st.subheader("📈 Analisi Storico Elo")
     
-    # Seleziona i top 3 giocatori per default (se ci sono)
     top_players = classifica_base.sort_values(by="Elo", ascending=False)['Giocatore'].head(3).tolist() if not classifica_base.empty else []
     
     players_to_plot = st.multiselect(
@@ -425,9 +416,17 @@ def main():
     )
 
     if players_to_plot:
-        # Costruisci il DataFrame per il grafico
-        # Dobbiamo unire le storie dei vari giocatori
         all_data = []
+        # Calcoliamo anche min e max globali per fissare gli assi
+        all_elos_global = [] 
+        for p_key in st.session_state.elo_history:
+            for rec in st.session_state.elo_history[p_key]:
+                all_elos_global.append(rec['Elo'])
+        
+        global_min = min(all_elos_global) if all_elos_global else 1000
+        global_max = max(all_elos_global) if all_elos_global else 1000
+        padding = 20 # Margine visivo
+
         for p in players_to_plot:
             if p in st.session_state.elo_history:
                 history = st.session_state.elo_history[p]
@@ -436,13 +435,15 @@ def main():
         
         if all_data:
             df_chart = pd.DataFrame(all_data)
-            st.line_chart(
-                df_chart, 
-                x="Data", 
-                y="Elo", 
-                color="Giocatore",
-                use_container_width=True
-            )
+            
+            # Usa Altair per fissare la scala Y
+            chart = alt.Chart(df_chart).mark_line().encode(
+                x='Data',
+                y=alt.Y('Elo', scale=alt.Scale(domain=[global_min - padding, global_max + padding])),
+                color='Giocatore'
+            ).interactive()
+            
+            st.altair_chart(chart, use_container_width=True)
         else:
             st.info("Nessun dato storico disponibile per i giocatori selezionati.")
     
@@ -451,7 +452,7 @@ def main():
     # --- TABELLA (Filtro Slider, default 2) ---
     soglia_pg_elo = st.slider(
         "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
-        min_value=0, max_value=max_pg + 1, value=2, # Default 2
+        min_value=0, max_value=max_pg + 1, value=2, 
         help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
         key="slider_elo"
     )
@@ -471,7 +472,7 @@ def main():
         }
     )
 
-    # --- Log partite nascosto in un Expander ---
+    # --- Log partite ---
     with st.expander("Mostra/Nascondi Log Partite Giocate", expanded=False):
         st.header("📜 Log Partite Giocate")
         if st.session_state.log_partite.empty:

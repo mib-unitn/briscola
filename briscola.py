@@ -5,7 +5,7 @@ import numpy as np
 import gspread
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import ast
-import altair as alt # <-- NUOVO IMPORT
+import altair as alt
 
 # --- 1. Configurazione Iniziale ---
 
@@ -180,15 +180,12 @@ def ricalcola_classifica():
     classifica_nuova['PG'] = 0
     classifica_nuova['Elo'] = ELO_STARTING
     
-    # --- Preparazione per lo storico ---
-    start_date = datetime.now()
-    if not log.empty and not log['data'].isnull().all():
-        try:
-            start_date = log['data'].min() - timedelta(days=1)
-        except:
-            pass 
-
-    elo_history_dict = {p: [{'Data': start_date, 'Elo': ELO_STARTING}] for p in LISTA_GIOCATORI}
+    # --- MODIFICA STORICO: Usa GameNum invece di Data ---
+    # Inizializza lo storico con GameNum 0 e Elo 1000
+    elo_history_dict = {p: [{'GameNum': 0, 'Elo': ELO_STARTING}] for p in LISTA_GIOCATORI}
+    
+    # Tracker per contare quante partite ha giocato ogni persona
+    player_game_counts = {p: 0 for p in LISTA_GIOCATORI}
 
     if log.empty or log.dropna(subset=['data']).empty:
         st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
@@ -260,9 +257,11 @@ def ricalcola_classifica():
                 elo_correnti[p_perd2] -= delta_totale / 2
                 giocatori_match = [p_vinc, p_perd1, p_perd2]
             
+            # --- MODIFICA: Aggiornamento Storico con GameNum ---
             for p in giocatori_match:
+                player_game_counts[p] += 1 # Incrementa contatore partite del giocatore
                 elo_history_dict[p].append({
-                    'Data': partita.data,
+                    'GameNum': player_game_counts[p],
                     'Elo': int(round(elo_correnti[p]))
                 })
 
@@ -404,7 +403,7 @@ def main():
     
     st.divider()
 
-    # --- GRAFICO ELO (Vincolato) ---
+    # --- GRAFICO ELO (Vincolato, asse X = GameNum) ---
     st.subheader("📈 Analisi Storico Elo")
     
     top_players = classifica_base.sort_values(by="Elo", ascending=False)['Giocatore'].head(3).tolist() if not classifica_base.empty else []
@@ -417,7 +416,7 @@ def main():
 
     if players_to_plot:
         all_data = []
-        # Calcoliamo anche min e max globali per fissare gli assi
+        # Calcoliamo min e max globali per fissare gli assi
         all_elos_global = [] 
         for p_key in st.session_state.elo_history:
             for rec in st.session_state.elo_history[p_key]:
@@ -431,16 +430,17 @@ def main():
             if p in st.session_state.elo_history:
                 history = st.session_state.elo_history[p]
                 for record in history:
-                    all_data.append({'Giocatore': p, 'Data': record['Data'], 'Elo': record['Elo']})
+                    all_data.append({'Giocatore': p, 'GameNum': record['GameNum'], 'Elo': record['Elo']})
         
         if all_data:
             df_chart = pd.DataFrame(all_data)
             
-            # Usa Altair per fissare la scala Y
+            # Usa Altair con GameNum sull'asse X
             chart = alt.Chart(df_chart).mark_line().encode(
-                x='Data',
+                x=alt.X('GameNum', title='Numero Partite Giocate'), # <-- MODIFICA ASSE X
                 y=alt.Y('Elo', scale=alt.Scale(domain=[global_min - padding, global_max + padding])),
-                color='Giocatore'
+                color='Giocatore',
+                tooltip=['Giocatore', 'GameNum', 'Elo']
             ).interactive()
             
             st.altair_chart(chart, use_container_width=True)

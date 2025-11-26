@@ -29,8 +29,8 @@ ELO_K_FACTOR = 32
 PODIO_MIN_PG = 20
 
 # Nuove soglie per le statistiche dettagliate
-STATS_MIN_TOTAL_PG = 25 # Minimo partite totali del giocatore per vedere le stats
-STATS_MIN_PAIR_PG = 10  # Minimo partite INSIEME a quella specifica persona
+STATS_MIN_TOTAL_PG = 20 # Minimo partite totali del giocatore per vedere le stats
+STATS_MIN_PAIR_PG = 5  # Minimo partite INSIEME a quella specifica persona
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
 COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo"]

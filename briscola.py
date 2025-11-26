@@ -281,15 +281,49 @@ def check_password():
             else: st.error("Password Errata")
     return False
 
+# --- Funzione Callback per gestire il salvataggio senza errori ---
+def callback_salva(gs, vs, bonus):
+    """
+    Questa funzione viene eseguita PRIMA che la pagina venga ricaricata.
+    Qui possiamo modificare session_state senza causare errori.
+    """
+    # 1. Validazione
+    n = len(gs)
+    error_msg = None
+    
+    if n not in [2, 3, 4]:
+        error_msg = "Numero giocatori non valido (min 2, max 4)."
+    elif (n in [2,3] and len(vs)!=1) or (n==4 and len(vs)!=2):
+        error_msg = "Seleziona il numero corretto di vincitori."
+    
+    # Se c'è un errore, lo salviamo nello stato per mostrarlo dopo il reload
+    if error_msg:
+        st.session_state['temp_err'] = error_msg
+        return
+
+    # 2. Registrazione
+    successo = registra_partita(gs, vs, bonus)
+    
+    # 3. Reset dei campi (Solo se successo)
+    if successo:
+        st.session_state.ms_giocatori = [] # Ora questo è sicuro!
+        st.session_state.check_bonus = False
+        st.session_state['temp_err'] = None # Pulisci errori precedenti
+
 # --- 3. UI Principale ---
 
 def main():
     inizializza_stato()
     if not check_password(): st.stop()
 
-    # --- SIDEBAR SEMPLIFICATA E DINAMICA ---
+    # --- SIDEBAR ---
     with st.sidebar:
         st.title("📝 Registra")
+        
+        # Mostra eventuali errori salvati dalla callback
+        if 'temp_err' in st.session_state and st.session_state['temp_err']:
+            st.error(st.session_state['temp_err'])
+            st.session_state['temp_err'] = None # Resetta dopo aver mostrato
         
         # 1. Selezione Giocatori
         gs = st.multiselect("1. Chi ha giocato?", LISTA_GIOCATORI, key="ms_giocatori")
@@ -312,24 +346,19 @@ def main():
             vs = st.multiselect("2. Chi ha vinto? (Seleziona 2)", gs, max_selections=2)
             
         elif n > 0:
-            st.warning("Seleziona 2, 3 o 4 giocatori per registrare.")
+            st.warning("Seleziona 2, 3 o 4 giocatori.")
 
         # 3. Bonus
-        bonus = st.checkbox(f"Bonus >100 (+{PUNTI_BONUS_100})")
+        bonus = st.checkbox(f"Bonus >100 (+{PUNTI_BONUS_100})", key="check_bonus")
         
-        # 4. Bottone Invio
-        if st.button("💾 Salva Partita", use_container_width=True, type="primary"):
-            # Validazione pre-click
-            if n not in [2, 3, 4]:
-                st.error("Numero giocatori non valido")
-            elif (n in [2,3] and len(vs)!=1) or (n==4 and len(vs)!=2):
-                st.error("Seleziona il numero corretto di vincitori")
-            else:
-                successo = registra_partita(gs, vs, bonus)
-                if successo:
-                    # Reset manuale dei widget tramite session state (necessario senza Form)
-                    st.session_state.ms_giocatori = [] 
-                    st.rerun()
+        # 4. Bottone Invio con CALLBACK (args passa i valori attuali)
+        st.button(
+            "💾 Salva Partita", 
+            use_container_width=True, 
+            type="primary",
+            on_click=callback_salva,
+            args=(gs, vs, bonus)
+        )
 
         st.markdown("---")
         with st.expander("⚙️ Amministrazione"):

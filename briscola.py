@@ -28,6 +28,10 @@ ELO_STARTING = 1000
 ELO_K_FACTOR = 32
 PODIO_MIN_PG = 20
 
+# Nuove soglie per le statistiche dettagliate
+STATS_MIN_TOTAL_PG = 25 # Minimo partite totali del giocatore per vedere le stats
+STATS_MIN_PAIR_PG = 10  # Minimo partite INSIEME a quella specifica persona
+
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
 COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo"]
 
@@ -36,12 +40,26 @@ st.markdown("""
     <style>
     .main-title { font-size: 3rem !important; font-weight: 800; color: #FF4B4B; text-align: center; margin-bottom: 0px; text-shadow: 2px 2px 4px rgba(0,0,0,0.1); }
     .subtitle { font-size: 1.2rem; color: #555; text-align: center; margin-bottom: 30px; font-style: italic; }
+    
+    /* Card Podio */
     div[data-testid="metric-container"] { background-color: #f0f2f6; border-radius: 10px; padding: 15px; border: 1px solid #dcdcdc; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s; }
     div[data-testid="metric-container"]:hover { transform: scale(1.02); }
     div[data-testid="column"]:nth-of-type(1) div[data-testid="metric-container"] { border-left: 5px solid #FFD700; }
     div[data-testid="column"]:nth-of-type(2) div[data-testid="metric-container"] { border-left: 5px solid #C0C0C0; }
     div[data-testid="column"]:nth-of-type(3) div[data-testid="metric-container"] { border-left: 5px solid #CD7F32; }
-    section[data-testid="stSidebar"] { background-color: #f9f9f9; }
+    
+    /* FIX SIDEBAR: Sfondo chiaro e TESTO SCURO forzato */
+    section[data-testid="stSidebar"] { 
+        background-color: #f9f9f9; 
+    }
+    section[data-testid="stSidebar"] h1, 
+    section[data-testid="stSidebar"] h2, 
+    section[data-testid="stSidebar"] h3, 
+    section[data-testid="stSidebar"] label, 
+    section[data-testid="stSidebar"] .stMarkdown,
+    section[data-testid="stSidebar"] p {
+        color: #333333 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -98,8 +116,7 @@ def salva_log_gsheet(df):
     return False
 
 def calcola_stats_dettagliate(player, log):
-    """Calcola statistiche avanzate per singolo giocatore."""
-    # Filtra partite dove il giocatore ha partecipato
+    """Calcola statistiche avanzate per singolo giocatore con soglie minime."""
     df_p = log[log['giocatori'].apply(lambda x: player in x)]
     
     if df_p.empty:
@@ -108,6 +125,16 @@ def calcola_stats_dettagliate(player, log):
     totale_partite = len(df_p)
     vittorie = len(df_p[df_p['vincitori'].apply(lambda x: player in x)])
     win_rate = (vittorie / totale_partite) * 100
+
+    # Se non hai giocato abbastanza partite totali, non calcoliamo nemesis/partner
+    if totale_partite < STATS_MIN_TOTAL_PG:
+        msg = f"Dati insufficienti (<{STATS_MIN_TOTAL_PG} partite)"
+        return {
+            "wr": win_rate,
+            "best_partner": msg,
+            "nemesis": msg,
+            "totale_partite": totale_partite
+        }
 
     # Dizionari per contatori
     compagni = {} # {nome: [vittorie_insieme, totale_insieme]}
@@ -118,56 +145,59 @@ def calcola_stats_dettagliate(player, log):
         
         # Logica Compagni (Solo 2v2)
         if row.num_giocatori == 4:
-            # Trova chi era in squadra con me
             my_team = row.vincitori if ha_vinto else [p for p in row.giocatori if p not in row.vincitori]
-            # Il compagno è colui che è nel mio team ma non sono io
             partners = [p for p in my_team if p != player]
             if partners:
                 partner = partners[0]
                 if partner not in compagni: compagni[partner] = [0, 0]
-                compagni[partner][1] += 1 # Incrementa partite totali
-                if ha_vinto: compagni[partner][0] += 1 # Incrementa vittorie
+                compagni[partner][1] += 1 
+                if ha_vinto: compagni[partner][0] += 1 
 
         # Logica Avversari (Tutte le modalità)
-        # Se ho vinto, gli avversari sono i perdenti. Se ho perso, sono i vincitori.
         opponents = [p for p in row.giocatori if p not in row.vincitori] if ha_vinto else row.vincitori
         for opp in opponents:
             if opp not in avversari: avversari[opp] = [0, 0]
-            avversari[opp][1] += 1 # Totale contro
-            if ha_vinto: avversari[opp][0] += 1 # Vittorie contro
+            avversari[opp][1] += 1 
+            if ha_vinto: avversari[opp][0] += 1 
 
-    # Trova Miglior Compagno (Minimo 3 partite insieme)
-    best_partner, best_partner_wr = "N/A", 0
+    # --- Trova Miglior Compagno ---
+    best_partner = f"Dati insufficienti (<{STATS_MIN_PAIR_PG} match)"
+    best_partner_wr = -1
+    
+    found_partner = False
     for p, stats in compagni.items():
-        if stats[1] >= 3:
+        if stats[1] >= STATS_MIN_PAIR_PG: # Soglia match insieme
+            found_partner = True
             wr = (stats[0] / stats[1]) * 100
             if wr > best_partner_wr:
                 best_partner_wr = wr
                 best_partner = f"{p} ({wr:.0f}%)"
+    
+    if not found_partner and totale_partite >= STATS_MIN_TOTAL_PG:
+         best_partner = f"Nessun partner > {STATS_MIN_PAIR_PG} match"
 
-    # Trova Bestia Nera (Peggior Winrate contro, Minimo 3 partite)
-    nemesis, nemesis_wr = "N/A", 101
+    # --- Trova Bestia Nera (Nemesis) ---
+    nemesis = f"Dati insufficienti (<{STATS_MIN_PAIR_PG} match)"
+    nemesis_wr = 101
+    
+    found_nemesis = False
     for p, stats in avversari.items():
-        if stats[1] >= 3:
+        if stats[1] >= STATS_MIN_PAIR_PG: # Soglia match contro
+            found_nemesis = True
             wr = (stats[0] / stats[1]) * 100
+            # Cerchiamo il WR più basso (quindi perdo spesso)
             if wr < nemesis_wr:
                 nemesis_wr = wr
                 nemesis = f"{p} ({wr:.0f}%)"
-    
-    # Trova Cliente (Miglior Winrate contro, Minimo 3 partite)
-    pigeon, pigeon_wr = "N/A", -1
-    for p, stats in avversari.items():
-        if stats[1] >= 3:
-            wr = (stats[0] / stats[1]) * 100
-            if wr > pigeon_wr:
-                pigeon_wr = wr
-                pigeon = f"{p} ({wr:.0f}%)"
+
+    if not found_nemesis and totale_partite >= STATS_MIN_TOTAL_PG:
+         nemesis = f"Nessun avversario > {STATS_MIN_PAIR_PG} match"
 
     return {
         "wr": win_rate,
         "best_partner": best_partner,
-        "nemesis": nemesis, # Contro chi perdi sempre
-        "pigeon": pigeon    # Contro chi vinci sempre
+        "nemesis": nemesis,
+        "totale_partite": totale_partite
     }
 
 def ricalcola_classifica():
@@ -380,26 +410,20 @@ def main():
 
     # --- NUOVA SEZIONE: STATISTICHE DETTAGLIATE GIOCATORI ---
     st.subheader("🕵️ Statistiche Giocatori")
-    st.markdown("Clicca sul nome per vedere il winrate e le affinità.")
+    st.markdown(f"Dettagli (Min. {STATS_MIN_TOTAL_PG} partite totali, {STATS_MIN_PAIR_PG} partite per coppia)")
     
-    # Ordina i giocatori per Elo per l'elenco
     players_sorted = df.sort_values(by="Elo", ascending=False)['Giocatore'].tolist()
     
     for p in players_sorted:
-        # Recupera l'Elo corrente
         curr_elo = df[df['Giocatore'] == p]['Elo'].values[0]
-        
-        # Calcola le stats
         stats = calcola_stats_dettagliate(p, st.session_state.log_partite)
         
         if stats:
             with st.expander(f"**{p}** (Elo: {curr_elo} - Winrate: {stats['wr']:.1f}%)"):
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Win Rate Globale", f"{stats['wr']:.1f}%")
-                c2.metric("🤝 Miglior Compagno (2v2)", stats['best_partner'], help="Con chi vinci di più quando siete in squadra insieme (Min 3 partite).")
-                c3.metric("💀 Bestia Nera (Avversario)", stats['nemesis'], help="L'avversario contro cui hai la % di vittoria più bassa (Min 3 partite).")
-                
-                # c4.metric("💰 Cliente (Avversario)", stats['pigeon'], help="L'avversario contro cui hai la % di vittoria più alta (Min 3 partite).")
+                c1.metric("Win Rate Globale", f"{stats['wr']:.1f}%", f"{stats['totale_partite']} match")
+                c2.metric("🤝 Miglior Compagno", stats['best_partner'], help=f"Min {STATS_MIN_PAIR_PG} match insieme")
+                c3.metric("💀 Bestia Nera", stats['nemesis'], help=f"Min {STATS_MIN_PAIR_PG} match contro")
 
     st.markdown("---")
 

@@ -7,196 +7,187 @@ from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import ast
 import altair as alt
 
-# --- 1. Configurazione Iniziale ---
+# --- CONFIGURAZIONE PAGINA ---
+st.set_page_config(
+    page_title="Torneo Briscola", 
+    layout="wide", 
+    page_icon="🃏",
+    initial_sidebar_state="expanded"
+)
 
-# INCOLLA QUI L'URL DEL TUO FOGLIO GOOGLE
+# --- 1. Configurazione Variabili ---
+
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea2DT-FlYmq_TjA4MFqdc1rr3GFj1MxpVfWm0MQxrQo/edit?gid=0#gid=0"
 
-# !!! MODIFICA QUI I TUOI GIOCATORI !!!
 LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Esteban", "Giampaolo"]
 
-# --- PUNTI BILANCIATI PER IL CALCOLO (PT) ---
-PUNTI_MAP = {
-    2: 2,  # Vittoria in partita a 2
-    3: 3,  # Vittoria in partita a 3
-    4: 2   # Vittoria in partita a 4 (per ciascun vincitore)
-}
+PUNTI_MAP = {2: 2, 3: 3, 4: 2}
 PUNTI_BONUS_100 = 0.5
 
-# Costanti Elo
 ELO_STARTING = 1000
-ELO_K_FACTOR = 64
-
-# Soglia per il Podio
+ELO_K_FACTOR = 32
 PODIO_MIN_PG = 20
 
-# Colonne
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
 COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo"]
 
-# --- 2. Funzioni di Persistenza Google Sheets ---
+# --- CSS PERSONALIZZATO ---
+st.markdown("""
+    <style>
+    .main-title { font-size: 3rem !important; font-weight: 800; color: #FF4B4B; text-align: center; margin-bottom: 0px; text-shadow: 2px 2px 4px rgba(0,0,0,0.1); }
+    .subtitle { font-size: 1.2rem; color: #555; text-align: center; margin-bottom: 30px; font-style: italic; }
+    div[data-testid="metric-container"] { background-color: #f0f2f6; border-radius: 10px; padding: 15px; border: 1px solid #dcdcdc; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s; }
+    div[data-testid="metric-container"]:hover { transform: scale(1.02); }
+    div[data-testid="column"]:nth-of-type(1) div[data-testid="metric-container"] { border-left: 5px solid #FFD700; }
+    div[data-testid="column"]:nth-of-type(2) div[data-testid="metric-container"] { border-left: 5px solid #C0C0C0; }
+    div[data-testid="column"]:nth-of-type(3) div[data-testid="metric-container"] { border-left: 5px solid #CD7F32; }
+    section[data-testid="stSidebar"] { background-color: #f9f9f9; }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- 2. Funzioni Backend ---
 
 def connect_to_gsheet():
-    """Connettiti a Google Sheets usando i secrets di Streamlit."""
     try:
         gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
         worksheet = gc.open_by_url(GOOGLE_SHEET_URL).sheet1
         return worksheet
     except Exception as e:
-        st.error(f"Errore di connessione a Google Sheets: {e}")
+        st.error(f"Errore GSheets: {e}")
         return None
 
 def carica_log_gsheet(worksheet):
-    """Carica il log dal Foglio Google."""
     try:
         df = get_as_dataframe(worksheet, evaluate_formulas=True, dtype_backend='pyarrow')
-        if df.empty:
-            df = pd.DataFrame(columns=COLONNE_LOG)
-        
+        if df.empty: return pd.DataFrame(columns=COLONNE_LOG)
         df = df.dropna(how='all').dropna(axis=1, how='all')
-        if df.empty:
-             df = pd.DataFrame(columns=COLONNE_LOG)
-             
-        if 'giocatori' in df.columns and not df['giocatori'].empty:
+        if df.empty: return pd.DataFrame(columns=COLONNE_LOG)
+        
+        if 'giocatori' in df.columns:
             df['giocatori'] = df['giocatori'].apply(lambda x: ast.literal_eval(str(x)) if isinstance(x, str) and x.startswith('[') else x)
-        if 'vincitori' in df.columns and not df['vincitori'].empty:
+        if 'vincitori' in df.columns:
             df['vincitori'] = df['vincitori'].apply(lambda x: ast.literal_eval(str(x)) if isinstance(x, str) and x.startswith('[') else x)
         
-        for col in ['num_giocatori', 'punti_vittoria', 'punti_bonus']:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
+        cols_num = ['num_giocatori', 'punti_vittoria', 'punti_bonus']
+        for c in cols_num:
+            if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            
         if 'data' in df.columns:
             df['data'] = pd.to_datetime(df['data'], errors='coerce')
         else:
             df['data'] = pd.NaT
 
         for col in COLONNE_LOG:
-            if col not in df.columns:
-                df[col] = pd.NA
-
-        df = df[COLONNE_LOG]
-        return df.astype({'punti_bonus': 'float', 'punti_vittoria': 'float', 'num_giocatori': 'int'})
-    except Exception as e:
-        st.warning(f"Errore nel caricamento del log: {e}. Provo a creare un log vuoto.")
+            if col not in df.columns: df[col] = pd.NA
+            
+        return df[COLONNE_LOG].astype({'punti_bonus': 'float', 'punti_vittoria': 'float', 'num_giocatori': 'int'})
+    except Exception:
         return pd.DataFrame(columns=COLONNE_LOG)
 
 def salva_log_gsheet(df):
-    """Salva l'intero DataFrame sul Foglio Google, sovrascrivendolo."""
-    if 'gs_worksheet' in st.session_state and st.session_state.gs_worksheet is not None:
+    if 'gs_worksheet' in st.session_state and st.session_state.gs_worksheet:
         try:
             df_to_save = df.copy()
             df_to_save['giocatori'] = df_to_save['giocatori'].astype(str)
             df_to_save['vincitori'] = df_to_save['vincitori'].astype(str)
-            
             st.session_state.gs_worksheet.clear()
             set_with_dataframe(st.session_state.gs_worksheet, df_to_save, include_index=False, resize=True)
             return True
-        except Exception as e:
-            st.sidebar.error(f"Errore nel salvataggio su GSheets: {e}")
+        except:
             return False
     return False
 
-# --- 3. Funzioni di Logica del Torneo ---
-
-def inizializza_stato():
-    """Inizializza lo stato in modo robusto."""
+def calcola_stats_dettagliate(player, log):
+    """Calcola statistiche avanzate per singolo giocatore."""
+    # Filtra partite dove il giocatore ha partecipato
+    df_p = log[log['giocatori'].apply(lambda x: player in x)]
     
-    if "password_correct" not in st.session_state:
-        st.session_state["password_correct"] = False
+    if df_p.empty:
+        return None
 
-    if 'log_partite' not in st.session_state:
-        st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
-    
-    if 'classifica' not in st.session_state:
-        classifica_vuota = pd.DataFrame(
-            0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:]
-        )
-        classifica_vuota['PG'] = 0
-        classifica_vuota['Elo'] = ELO_STARTING
-        st.session_state.classifica = classifica_vuota.reset_index().rename(columns={'index': 'Giocatore'})
-    
-    if 'elo_history' not in st.session_state:
-        st.session_state.elo_history = {} 
+    totale_partite = len(df_p)
+    vittorie = len(df_p[df_p['vincitori'].apply(lambda x: player in x)])
+    win_rate = (vittorie / totale_partite) * 100
 
-    if 'gs_worksheet' not in st.session_state:
-        st.session_state.gs_worksheet = None
+    # Dizionari per contatori
+    compagni = {} # {nome: [vittorie_insieme, totale_insieme]}
+    avversari = {} # {nome: [vittorie_contro, totale_contro]}
+
+    for row in df_p.itertuples():
+        ha_vinto = player in row.vincitori
         
-    if 'log_caricato' not in st.session_state:
-        st.session_state.log_caricato = False
+        # Logica Compagni (Solo 2v2)
+        if row.num_giocatori == 4:
+            # Trova chi era in squadra con me
+            my_team = row.vincitori if ha_vinto else [p for p in row.giocatori if p not in row.vincitori]
+            # Il compagno è colui che è nel mio team ma non sono io
+            partners = [p for p in my_team if p != player]
+            if partners:
+                partner = partners[0]
+                if partner not in compagni: compagni[partner] = [0, 0]
+                compagni[partner][1] += 1 # Incrementa partite totali
+                if ha_vinto: compagni[partner][0] += 1 # Incrementa vittorie
 
-    if st.session_state.gs_worksheet is None:
-        st.session_state.gs_worksheet = connect_to_gsheet()
-    
-    if st.session_state.gs_worksheet is not None and not st.session_state.log_caricato:
-        st.session_state.log_partite = carica_log_gsheet(st.session_state.gs_worksheet)
-        st.session_state.log_caricato = True
-        ricalcola_classifica()
-        
-def reset_torneo():
-    """Resetta il torneo CANCELLANDO i dati sul Foglio Google."""
-    st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
-    salva_log_gsheet(st.session_state.log_partite)
-    
-    classifica_vuota = pd.DataFrame({
-        'Giocatore': LISTA_GIOCATORI,
-        'PG': 0, 'V2': 0, 'V3': 0, 'V4': 0, 'PT': 0.0, 'MPP': 0.0,
-        'Elo': ELO_STARTING
-    }).set_index('Giocatore')
-    st.session_state.classifica = classifica_vuota.reset_index()
-    
-    st.session_state.elo_history = {}
-    
-    st.session_state["password_correct"] = False
-    st.sidebar.success("Torneo resettato.")
+        # Logica Avversari (Tutte le modalità)
+        # Se ho vinto, gli avversari sono i perdenti. Se ho perso, sono i vincitori.
+        opponents = [p for p in row.giocatori if p not in row.vincitori] if ha_vinto else row.vincitori
+        for opp in opponents:
+            if opp not in avversari: avversari[opp] = [0, 0]
+            avversari[opp][1] += 1 # Totale contro
+            if ha_vinto: avversari[opp][0] += 1 # Vittorie contro
 
-def check_password():
-    """Restituisce True se la password è corretta, False altrimenti."""
-    if st.session_state.get("password_correct", False):
-        return True
-    st.title("🔒 Accesso Protetto")
-    st.write("Inserisci la password per accedere al torneo:")
-    try:
-        correct_password = st.secrets["credentials"]["password"]
-    except:
-        st.error("Password non configurata. Controlla il file .streamlit/secrets.toml.")
-        return False
-    password_input = st.text_input("Password", type="password", key="password_input_widget")
-    if st.button("Accedi"):
-        if password_input == correct_password:
-            st.session_state["password_correct"] = True
-            st.rerun()
-        else:
-            st.error("Password errata. Riprova.")
-    return False
+    # Trova Miglior Compagno (Minimo 3 partite insieme)
+    best_partner, best_partner_wr = "N/A", 0
+    for p, stats in compagni.items():
+        if stats[1] >= 3:
+            wr = (stats[0] / stats[1]) * 100
+            if wr > best_partner_wr:
+                best_partner_wr = wr
+                best_partner = f"{p} ({wr:.0f}%)"
+
+    # Trova Bestia Nera (Peggior Winrate contro, Minimo 3 partite)
+    nemesis, nemesis_wr = "N/A", 101
+    for p, stats in avversari.items():
+        if stats[1] >= 3:
+            wr = (stats[0] / stats[1]) * 100
+            if wr < nemesis_wr:
+                nemesis_wr = wr
+                nemesis = f"{p} ({wr:.0f}%)"
+    
+    # Trova Cliente (Miglior Winrate contro, Minimo 3 partite)
+    pigeon, pigeon_wr = "N/A", -1
+    for p, stats in avversari.items():
+        if stats[1] >= 3:
+            wr = (stats[0] / stats[1]) * 100
+            if wr > pigeon_wr:
+                pigeon_wr = wr
+                pigeon = f"{p} ({wr:.0f}%)"
+
+    return {
+        "wr": win_rate,
+        "best_partner": best_partner,
+        "nemesis": nemesis, # Contro chi perdi sempre
+        "pigeon": pigeon    # Contro chi vinci sempre
+    }
 
 def ricalcola_classifica():
-    """Ricalcola l'intera classifica e lo STORICO ELO."""
     log = st.session_state.get('log_partite', pd.DataFrame(columns=COLONNE_LOG))
     
-    classifica_nuova = pd.DataFrame(
-        0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:]
-    )
+    classifica_nuova = pd.DataFrame(0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:])
     classifica_nuova['PG'] = 0
     classifica_nuova['Elo'] = ELO_STARTING
     
-    # --- MODIFICA STORICO: Usa GameNum invece di Data ---
-    # Inizializza lo storico con GameNum 0 e Elo 1000
     elo_history_dict = {p: [{'GameNum': 0, 'Elo': ELO_STARTING}] for p in LISTA_GIOCATORI}
-    
-    # Tracker per contare quante partite ha giocato ogni persona
     player_game_counts = {p: 0 for p in LISTA_GIOCATORI}
 
     if log.empty or log.dropna(subset=['data']).empty:
         st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
-        st.session_state.elo_history = elo_history_dict 
+        st.session_state.elo_history = elo_history_dict
         return
 
-    # --- 1. Calcolo Sistema MPP ---
+    # MPP (Backend)
     log_valido = log.dropna(subset=['giocatori', 'vincitori', 'data'])
-    
-    pg_counts = log_valido['giocatori'].explode().value_counts()
-    classifica_nuova['PG'].update(pg_counts)
+    classifica_nuova['PG'].update(log_valido['giocatori'].explode().value_counts())
     
     for partita in log_valido.itertuples():
         col_vittoria = f'V{int(partita.num_giocatori)}'
@@ -206,287 +197,240 @@ def ricalcola_classifica():
                     classifica_nuova.loc[vincitore, col_vittoria] += 1
                     classifica_nuova.loc[vincitore, 'PT'] += (partita.punti_vittoria + partita.punti_bonus)
     
-    classifica_nuova['MPP'] = np.where(
-        classifica_nuova['PG'] > 0, 
-        classifica_nuova['PT'] / classifica_nuova['PG'], 
-        0
-    ).round(3) 
+    classifica_nuova['MPP'] = np.where(classifica_nuova['PG'] > 0, classifica_nuova['PT'] / classifica_nuova['PG'], 0).round(3)
 
-    # --- 2. Calcolo Sistema ELO ---
-    log_ordinato_elo = log_valido.sort_values(by="data", ascending=True)
-    elo_correnti = classifica_nuova['Elo'].to_dict()
+    # Elo
+    log_elo = log_valido.sort_values(by="data", ascending=True)
+    elo_curr = classifica_nuova['Elo'].to_dict()
     
-    for partita in log_ordinato_elo.itertuples():
-        giocatori = partita.giocatori
-        vincitori = partita.vincitori
-        perdenti = [p for p in giocatori if p not in vincitori]
-        num_g = partita.num_giocatori
-        giocatori_match = []
+    for partita in log_elo.itertuples():
+        gs = partita.giocatori
+        vs = partita.vincitori
+        ps = [p for p in gs if p not in vs]
+        n = partita.num_giocatori
+        gm = []
 
         try:
-            if num_g == 2: # 1v1
-                p_vinc = vincitori[0]
-                p_perd = perdenti[0]
-                R_vinc, R_perd = elo_correnti[p_vinc], elo_correnti[p_perd]
-                E_vinc = 1 / (1 + 10**((R_perd - R_vinc) / 400))
-                delta = ELO_K_FACTOR * (1 - E_vinc)
-                elo_correnti[p_vinc] += delta
-                elo_correnti[p_perd] -= delta
-                giocatori_match = [p_vinc, p_perd]
-
-            elif num_g == 4: # 2v2
-                R_team_vinc = (elo_correnti[vincitori[0]] + elo_correnti[vincitori[1]]) / 2
-                R_team_perd = (elo_correnti[perdenti[0]] + elo_correnti[perdenti[1]]) / 2
-                E_team_vinc = 1 / (1 + 10**((R_team_perd - R_team_vinc) / 400))
-                delta_team = ELO_K_FACTOR * (1 - E_team_vinc)
-                elo_correnti[vincitori[0]] += delta_team
-                elo_correnti[vincitori[1]] += delta_team
-                elo_correnti[perdenti[0]] -= delta_team
-                elo_correnti[perdenti[1]] -= delta_team
-                giocatori_match = vincitori + perdenti
-
-            elif num_g == 3: # 1v1v1
-                p_vinc = vincitori[0]
-                p_perd1, p_perd2 = perdenti[0], perdenti[1]
-                R_vinc = elo_correnti[p_vinc]
-                R_perd_avg = (elo_correnti[p_perd1] + elo_correnti[p_perd2]) / 2
-                E_vinc = 1 / (1 + 10**((R_perd_avg - R_vinc) / 400))
-                delta_totale = ELO_K_FACTOR * (1 - E_vinc)
-                elo_correnti[p_vinc] += delta_totale
-                elo_correnti[p_perd1] -= delta_totale / 2
-                elo_correnti[p_perd2] -= delta_totale / 2
-                giocatori_match = [p_vinc, p_perd1, p_perd2]
+            if n == 2:
+                w, l = vs[0], ps[0]
+                rw, rl = elo_curr[w], elo_curr[l]
+                ew = 1 / (1 + 10**((rl - rw) / 400))
+                d = ELO_K_FACTOR * (1 - ew)
+                elo_curr[w] += d; elo_curr[l] -= d
+                gm = [w, l]
+            elif n == 4:
+                rw = (elo_curr[vs[0]] + elo_curr[vs[1]]) / 2
+                rl = (elo_curr[ps[0]] + elo_curr[ps[1]]) / 2
+                ew = 1 / (1 + 10**((rl - rw) / 400))
+                d = ELO_K_FACTOR * (1 - ew)
+                elo_curr[vs[0]] += d; elo_curr[vs[1]] += d
+                elo_curr[ps[0]] -= d; elo_curr[ps[1]] -= d
+                gm = vs + ps
+            elif n == 3:
+                w, l1, l2 = vs[0], ps[0], ps[1]
+                rw = elo_curr[w]
+                rl_avg = (elo_curr[l1] + elo_curr[l2]) / 2
+                ew = 1 / (1 + 10**((rl_avg - rw) / 400))
+                d = ELO_K_FACTOR * (1 - ew)
+                elo_curr[w] += d
+                elo_curr[l1] -= d/2; elo_curr[l2] -= d/2
+                gm = [w, l1, l2]
             
-            # --- MODIFICA: Aggiornamento Storico con GameNum ---
-            for p in giocatori_match:
-                player_game_counts[p] += 1 # Incrementa contatore partite del giocatore
-                elo_history_dict[p].append({
-                    'GameNum': player_game_counts[p],
-                    'Elo': int(round(elo_correnti[p]))
-                })
-
-        except (KeyError, IndexError):
-             continue
-    
-    classifica_nuova['Elo'] = classifica_nuova.index.map(elo_correnti).round(0).astype(int)
+            for p in gm:
+                player_game_counts[p] += 1
+                elo_history_dict[p].append({'GameNum': player_game_counts[p], 'Elo': int(round(elo_curr[p]))})
+                
+        except: continue
+        
+    classifica_nuova['Elo'] = classifica_nuova.index.map(elo_curr).round(0).astype(int)
     st.session_state.classifica = classifica_nuova.reset_index().rename(columns={'index': 'Giocatore'})
     st.session_state.elo_history = elo_history_dict
 
+def inizializza_stato():
+    if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
+    if 'log_partite' not in st.session_state: st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
+    if 'classifica' not in st.session_state:
+        df = pd.DataFrame(0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:])
+        df['PG'], df['Elo'] = 0, ELO_STARTING
+        st.session_state.classifica = df.reset_index().rename(columns={'index': 'Giocatore'})
+    if 'elo_history' not in st.session_state: st.session_state.elo_history = {}
+    if 'gs_worksheet' not in st.session_state: st.session_state.gs_worksheet = None
+    if 'log_caricato' not in st.session_state: st.session_state.log_caricato = False
 
-def registra_partita(giocatori_partita, vincitori_selezionati, bonus_attivo):
-    """Aggiunge una partita al log, lo SALVA SU GSHEET e ricalcola."""
-    
-    num_giocatori = len(giocatori_partita)
-    num_vincitori = len(vincitori_selezionati)
-    if not giocatori_partita: st.sidebar.error("Seleziona i giocatori."); return False
-    if num_giocatori < 2: st.sidebar.error("Seleziona almeno 2 giocatori."); return False
-    if not vincitori_selezionati: st.sidebar.error("Seleziona almeno un vincitore."); return False
-    if num_giocatori not in PUNTI_MAP: st.sidebar.error(f"Il numero di giocatori ({num_giocatori}) non è valido."); return False
-    if num_giocatori in [2, 3] and num_vincitori != 1: st.sidebar.error(f"Le partite a {num_giocatori} giocatori devono avere 1 solo vincitore."); return False
-    if num_giocatori == 4 and num_vincitori != 2: st.sidebar.error("Le partite a 4 giocatori devono avere 2 vincitori."); return False
-    for v in vincitori_selezionati:
-        if v not in giocatori_partita: st.sidebar.error(f"Il vincitore {v} non è tra i giocatori."); return False
+    if st.session_state.gs_worksheet is None: st.session_state.gs_worksheet = connect_to_gsheet()
+    if st.session_state.gs_worksheet and not st.session_state.log_caricato:
+        st.session_state.log_partite = carica_log_gsheet(st.session_state.gs_worksheet)
+        st.session_state.log_caricato = True
+        ricalcola_classifica()
 
-    data_ora = datetime.now()
-    giorno = data_ora.strftime('%A')
-    punti_base = PUNTI_MAP[num_giocatori]
-    punti_bonus_val = PUNTI_BONUS_100 if bonus_attivo else 0.0
-    
-    nuova_partita = pd.DataFrame([{
-        "data": data_ora, "giorno_settimana": giorno, "giocatori": giocatori_partita, 
-        "vincitori": vincitori_selezionati, "num_giocatori": num_giocatori,
-        "punti_vittoria": punti_base, "punti_bonus": punti_bonus_val
+def registra_partita(gs, vs, bonus):
+    n = len(gs)
+    nv = len(vs)
+    if not gs: return st.sidebar.error("Seleziona giocatori")
+    if n < 2: return st.sidebar.error("Minimo 2 giocatori")
+    if not vs: return st.sidebar.error("Seleziona vincitore")
+    if (n in [2,3] and nv!=1) or (n==4 and nv!=2): return st.sidebar.error("Numero vincitori errato")
+    for v in vs: 
+        if v not in gs: return st.sidebar.error(f"{v} non ha giocato")
+        
+    row = pd.DataFrame([{
+        "data": datetime.now(), "giorno_settimana": datetime.now().strftime('%A'),
+        "giocatori": gs, "vincitori": vs, "num_giocatori": n,
+        "punti_vittoria": PUNTI_MAP[n], "punti_bonus": PUNTI_BONUS_100 if bonus else 0.0
     }])
-    
-    st.session_state.log_partite = pd.concat(
-        [st.session_state.log_partite, nuova_partita], 
-        ignore_index=True
-    )
-    
+    st.session_state.log_partite = pd.concat([st.session_state.log_partite, row], ignore_index=True)
     salva_log_gsheet(st.session_state.log_partite)
     ricalcola_classifica()
-    
-    vincitori_str = " e ".join(vincitori_selezionati)
-    messaggio_bonus = f" (+{PUNTI_BONUS_100} bonus)" if bonus_attivo else ""
-    st.sidebar.success(f"Partita registrata! {vincitori_str} vincono {punti_base}{messaggio_bonus} punti (MPP).")
-    st.toast("Classifiche aggiornate!", icon="🏆")
-    
+    st.toast(f"Vittoria registrata per {', '.join(vs)}!", icon="✅")
     return True
 
-# --- 4. Struttura dell'App Streamlit (MODIFICATA) ---
+def check_password():
+    if st.session_state.get("password_correct", False): return True
+    st.markdown("<h1 style='text-align: center;'>🔒 Accesso Protetto</h1>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1,2,1])
+    with c2:
+        pwd = st.text_input("Inserisci Password", type="password")
+        if st.button("Entra", use_container_width=True):
+            if pwd == st.secrets["credentials"]["password"]:
+                st.session_state["password_correct"] = True
+                st.rerun()
+            else: st.error("Password Errata")
+    return False
+
+# --- 3. UI Principale ---
 
 def main():
-    st.set_page_config(page_title="Torneo Briscola", layout="wide", page_icon="🏆")
-    
     inizializza_stato()
+    if not check_password(): st.stop()
 
-    if not check_password():
-        st.stop()
-    
-    def processa_registrazione():
-        giocatori = st.session_state.multiselect_giocatori
-        vincitori = st.session_state.select_vincitori
-        bonus = st.session_state.check_bonus 
-        successo = registra_partita(giocatori, vincitori, bonus)
-        if successo:
-            st.session_state.multiselect_giocatori = []
-            st.session_state.select_vincitori = []
-            st.session_state.check_bonus = False
-
-    # --- Sidebar ---
+    # --- SIDEBAR ---
     with st.sidebar:
-        st.header("📋 Registra Partita")
-        
-        giocatori_selezionati = st.multiselect(
-            "Chi ha giocato?", options=LISTA_GIOCATORI, key="multiselect_giocatori"
-        )
-        vincitori_selezionati = st.multiselect( 
-            "Chi ha vinto?", options=giocatori_selezionati if giocatori_selezionati else [], key="select_vincitori" 
-        )
-        
-        if vincitori_selezionati:
-            st.checkbox(f"Bonus >100 punti (+{PUNTI_BONUS_100}pt)", key="check_bonus")
-        else:
-            st.checkbox(f"Bonus >100 punti (+{PUNTI_BONUS_100}pt)", key="check_bonus", disabled=True, value=False)
-
-        st.button(
-            "Registra Partita", use_container_width=True, type="primary", on_click=processa_registrazione
-        )
-        st.divider()
-
-        with st.expander("⚠️ Opzioni Avanzate", expanded=False):
-            st.write("Azioni pericolose o di amministrazione.")
+        st.title("📝 Registra")
+        with st.form("registra_form", clear_on_submit=True):
+            gs = st.multiselect("Giocatori", LISTA_GIOCATORI)
+            vs = st.multiselect("Vincitori", gs)
+            bonus = st.checkbox(f"Bonus >100 (+{PUNTI_BONUS_100})")
+            submitted = st.form_submit_button("💾 Salva Partita", use_container_width=True, type="primary")
             
-            if st.button("🗑️ Elimina Ultima Partita", use_container_width=True, help="Rimuove l'ultima partita registrata nel log"):
-                if st.session_state.log_partite.empty:
-                    st.sidebar.error("Nessuna partita da eliminare.")
-                else:
-                    st.session_state.log_partite = st.session_state.log_partite.sort_values(by="data").iloc[:-1]
+            if submitted:
+                registra_partita(gs, vs, bonus)
+        
+        st.markdown("---")
+        with st.expander("⚙️ Amministrazione"):
+            if st.button("🗑️ Elimina Ultima", use_container_width=True):
+                if not st.session_state.log_partite.empty:
+                    st.session_state.log_partite = st.session_state.log_partite.sort_values('data').iloc[:-1]
                     salva_log_gsheet(st.session_state.log_partite)
                     ricalcola_classifica()
-                    st.sidebar.success("Ultima partita eliminata con successo.")
                     st.rerun()
-
-            if st.button("🚨 RESETTA TORNEO 🚨", use_container_width=True, help="Cancella TUTTE le partite e resetta le classifiche. Richiede nuovo login."):
-                reset_torneo()
+            if st.button("🔥 Reset Totale", use_container_width=True):
+                st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
+                salva_log_gsheet(st.session_state.log_partite)
+                st.session_state.elo_history = {}
+                ricalcola_classifica()
                 st.rerun()
 
-    # --- PAGINA PRINCIPALE (SOLO ELO) ---
-    st.title("🏆 Classifica Briscola (Elo)")
-    st.markdown(f"Classifica basata sul sistema **Rating Elo** (Start: {ELO_STARTING}, K-Factor: {ELO_K_FACTOR}).")
+    # --- MAIN PAGE ---
+    st.markdown('<div class="main-title">🃏 Torneo Briscola</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="subtitle">Sistema Elo (Start: {ELO_STARTING}, K: {ELO_K_FACTOR}) - Podio Elite: {PODIO_MIN_PG}+ Partite</div>', unsafe_allow_html=True)
 
-    classifica_base = st.session_state.classifica.copy()
-    if 'PG' in classifica_base.columns and not classifica_base.empty:
-        max_pg = int(classifica_base['PG'].max())
+    df = st.session_state.classifica.copy()
+    max_pg = int(df['PG'].max()) if not df.empty else 0
+
+    # --- PODIO ---
+    podio = df[df['PG'] >= PODIO_MIN_PG].sort_values(by=["Elo", "PG"], ascending=[False, True]).reset_index(drop=True)
+    
+    col1, col2, col3 = st.columns(3)
+    if not podio.empty:
+        if len(podio) > 0: col1.metric("🥇 1° Posto", podio.iloc[0]['Giocatore'], f"{podio.iloc[0]['Elo']} Elo")
+        if len(podio) > 1: col2.metric("🥈 2° Posto", podio.iloc[1]['Giocatore'], f"{podio.iloc[1]['Elo']} Elo")
+        if len(podio) > 2: col3.metric("🥉 3° Posto", podio.iloc[2]['Giocatore'], f"{podio.iloc[2]['Elo']} Elo")
     else:
-        max_pg = 0
+        st.info(f"Nessun giocatore ha raggiunto {PODIO_MIN_PG} partite.")
 
-    # --- PODIO (Solo Elo, PG >= 20) ---
-    classifica_elo_podio = classifica_base[classifica_base['PG'] >= PODIO_MIN_PG].sort_values(
-        by=["Elo", "MPP", "PG"], ascending=[False, False, True]
-    ).reset_index(drop=True)
+    st.markdown("---")
 
-    col1_e, col2_e, col3_e = st.columns(3)
+    # --- GRAFICO ---
+    st.subheader("📈 Andamento Elo")
+    top3 = df.sort_values("Elo", ascending=False).head(3)['Giocatore'].tolist()
+    sel_players = st.multiselect("Confronta giocatori", LISTA_GIOCATORI, default=top3)
     
-    if classifica_elo_podio.empty:
-        st.info(f"Nessun giocatore ha ancora raggiunto {PODIO_MIN_PG} partite per il podio.")
-    else:
-        if len(classifica_elo_podio) >= 1:
-            r = classifica_elo_podio.iloc[0]
-            col1_e.metric("🥇 1° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
-        if len(classifica_elo_podio) >= 2:
-            r = classifica_elo_podio.iloc[1]
-            col2_e.metric("🥈 2° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
-        if len(classifica_elo_podio) >= 3:
-            r = classifica_elo_podio.iloc[2]
-            col3_e.metric("🥉 3° Posto", r['Giocatore'], f"{r['Elo']} Elo ({r['PG']} PG)")
-    
-    st.divider()
-
-    # --- GRAFICO ELO (Vincolato, asse X = GameNum) ---
-    st.subheader("📈 Analisi Storico Elo")
-    
-    top_players = classifica_base.sort_values(by="Elo", ascending=False)['Giocatore'].head(3).tolist() if not classifica_base.empty else []
-    
-    players_to_plot = st.multiselect(
-        "Seleziona i giocatori da confrontare:",
-        options=LISTA_GIOCATORI,
-        default=top_players
-    )
-
-    if players_to_plot:
-        all_data = []
-        # Calcoliamo min e max globali per fissare gli assi
-        all_elos_global = [] 
-        for p_key in st.session_state.elo_history:
-            for rec in st.session_state.elo_history[p_key]:
-                all_elos_global.append(rec['Elo'])
+    if sel_players:
+        all_data, all_elos = [], []
+        for p in st.session_state.elo_history:
+             for r in st.session_state.elo_history[p]: all_elos.append(r['Elo'])
         
-        global_min = min(all_elos_global) if all_elos_global else 1000
-        global_max = max(all_elos_global) if all_elos_global else 1000
-        padding = 20 # Margine visivo
+        ymin, ymax = (min(all_elos)-20, max(all_elos)+20) if all_elos else (900, 1100)
 
-        for p in players_to_plot:
+        for p in sel_players:
             if p in st.session_state.elo_history:
-                history = st.session_state.elo_history[p]
-                for record in history:
-                    all_data.append({'Giocatore': p, 'GameNum': record['GameNum'], 'Elo': record['Elo']})
+                for r in st.session_state.elo_history[p]:
+                    all_data.append({'Giocatore': p, 'Partita': r['GameNum'], 'Elo': r['Elo']})
         
         if all_data:
-            df_chart = pd.DataFrame(all_data)
-            
-            # Usa Altair con GameNum sull'asse X
-            chart = alt.Chart(df_chart).mark_line().encode(
-                x=alt.X('GameNum', title='Numero Partite Giocate'), # <-- MODIFICA ASSE X
-                y=alt.Y('Elo', scale=alt.Scale(domain=[global_min - padding, global_max + padding])),
+            chart = alt.Chart(pd.DataFrame(all_data)).mark_line(point=True).encode(
+                x=alt.X('Partita', title='Partite Giocate'),
+                y=alt.Y('Elo', scale=alt.Scale(domain=[ymin, ymax])),
                 color='Giocatore',
-                tooltip=['Giocatore', 'GameNum', 'Elo']
+                tooltip=['Giocatore', 'Partita', 'Elo']
             ).interactive()
-            
             st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("Nessun dato storico disponibile per i giocatori selezionati.")
-    
-    st.divider()
-    
-    # --- TABELLA (Filtro Slider, default 2) ---
-    soglia_pg_elo = st.slider(
-        "Mostra solo giocatori con almeno X Partite Giocate (PG):", 
-        min_value=0, max_value=max_pg + 1, value=2, 
-        help="Usare 0 per mostrare tutti, default 2 (più di 1 partita).",
-        key="slider_elo"
-    )
 
-    classifica_elo_filtrata = classifica_base.copy()
-    if soglia_pg_elo > 0:
-        classifica_elo_filtrata = classifica_elo_filtrata[classifica_elo_filtrata['PG'] >= soglia_pg_elo]
+    st.markdown("---")
 
+    # --- NUOVA SEZIONE: STATISTICHE DETTAGLIATE GIOCATORI ---
+    st.subheader("🕵️ Statistiche Giocatori")
+    st.markdown("Clicca sul nome per vedere il winrate e le affinità.")
+    
+    # Ordina i giocatori per Elo per l'elenco
+    players_sorted = df.sort_values(by="Elo", ascending=False)['Giocatore'].tolist()
+    
+    for p in players_sorted:
+        # Recupera l'Elo corrente
+        curr_elo = df[df['Giocatore'] == p]['Elo'].values[0]
+        
+        # Calcola le stats
+        stats = calcola_stats_dettagliate(p, st.session_state.log_partite)
+        
+        if stats:
+            with st.expander(f"**{p}** (Elo: {curr_elo} - Winrate: {stats['wr']:.1f}%)"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Win Rate Globale", f"{stats['wr']:.1f}%")
+                c2.metric("🤝 Miglior Compagno (2v2)", stats['best_partner'], help="Con chi vinci di più quando siete in squadra insieme (Min 3 partite).")
+                c3.metric("💀 Bestia Nera (Avversario)", stats['nemesis'], help="L'avversario contro cui hai la % di vittoria più bassa (Min 3 partite).")
+                
+                # c4.metric("💰 Cliente (Avversario)", stats['pigeon'], help="L'avversario contro cui hai la % di vittoria più alta (Min 3 partite).")
+
+    st.markdown("---")
+
+    # --- CLASSIFICA TABELLARE ---
+    st.markdown("### 📊 Classifica Completa")
+    min_pg_filter = st.slider("Filtra per Partite Minime", 0, max_pg+1, 2)
+    df_show = df[df['PG'] >= min_pg_filter].sort_values(["Elo", "PG"], ascending=[False, True])
+    
     st.dataframe(
-        classifica_elo_filtrata.sort_values(by=["Elo", "PG"], ascending=[False, True]), 
+        df_show,
         use_container_width=True,
+        hide_index=True,
+        column_order=["Giocatore", "Elo", "PG", "PT", "V2", "V3", "V4"],
         column_config={
-            "Elo": st.column_config.NumberColumn(format="%d"), 
-            "PT": st.column_config.NumberColumn("Punti Totali", format="%.1f"), 
-            "PG": st.column_config.NumberColumn("Partite Giocate"),
-            "MPP": st.column_config.NumberColumn(format="%.3f") 
+            "Elo": st.column_config.ProgressColumn("Rating Elo", format="%d", min_value=800, max_value=1200),
+            "PG": st.column_config.NumberColumn("Partite", format="%d"),
+            "PT": st.column_config.NumberColumn("Punti Totali", format="%.1f"),
+            "V2": st.column_config.NumberColumn("Vittorie (2)", format="%d"),
+            "V3": st.column_config.NumberColumn("Vittorie (3)", format="%d"),
+            "V4": st.column_config.NumberColumn("Vittorie (4)", format="%d"),
         }
     )
 
-    # --- Log partite ---
-    with st.expander("Mostra/Nascondi Log Partite Giocate", expanded=False):
-        st.header("📜 Log Partite Giocate")
-        if st.session_state.log_partite.empty:
-            st.info("Nessuna partita ancora registrata.")
-        else:
+    # --- LOG ---
+    with st.expander("📜 Storico Partite"):
+        if not st.session_state.log_partite.empty:
             st.dataframe(
-                st.session_state.log_partite.sort_values(by="data", ascending=False),
+                st.session_state.log_partite.sort_values('data', ascending=False),
                 use_container_width=True,
-                column_config={
-                    "data": st.column_config.DatetimeColumn("Data e Ora", format="DD/MM/YYYY - HH:mm"),
-                    "giocatori": st.column_config.ListColumn("Giocatori Coinvolti"),
-                    "vincitori": st.column_config.ListColumn("Vincitori"),
-                    "punti_bonus": st.column_config.NumberColumn("Bonus", format="%.1f")
-                }
+                hide_index=True,
+                column_config={"data": st.column_config.DatetimeColumn("Data", format="DD/MM HH:mm")}
             )
 
 if __name__ == "__main__":

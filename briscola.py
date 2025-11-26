@@ -27,10 +27,8 @@ PUNTI_BONUS_100 = 0.5
 ELO_STARTING = 1000
 ELO_K_FACTOR = 32
 PODIO_MIN_PG = 20
-
-# Nuove soglie per le statistiche dettagliate
-STATS_MIN_TOTAL_PG = 20 # Minimo partite totali del giocatore per vedere le stats
-STATS_MIN_PAIR_PG = 5  # Minimo partite INSIEME a quella specifica persona
+STATS_MIN_TOTAL_PG = 20 
+STATS_MIN_PAIR_PG = 5 
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
 COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo"]
@@ -41,25 +39,14 @@ st.markdown("""
     .main-title { font-size: 3rem !important; font-weight: 800; color: #FF4B4B; text-align: center; margin-bottom: 0px; text-shadow: 2px 2px 4px rgba(0,0,0,0.1); }
     .subtitle { font-size: 1.2rem; color: #555; text-align: center; margin-bottom: 30px; font-style: italic; }
     
-    /* Card Podio */
     div[data-testid="metric-container"] { background-color: #f0f2f6; border-radius: 10px; padding: 15px; border: 1px solid #dcdcdc; box-shadow: 2px 2px 5px rgba(0,0,0,0.05); transition: transform 0.2s; }
     div[data-testid="metric-container"]:hover { transform: scale(1.02); }
     div[data-testid="column"]:nth-of-type(1) div[data-testid="metric-container"] { border-left: 5px solid #FFD700; }
     div[data-testid="column"]:nth-of-type(2) div[data-testid="metric-container"] { border-left: 5px solid #C0C0C0; }
     div[data-testid="column"]:nth-of-type(3) div[data-testid="metric-container"] { border-left: 5px solid #CD7F32; }
     
-    /* FIX SIDEBAR: Sfondo chiaro e TESTO SCURO forzato */
-    section[data-testid="stSidebar"] { 
-        background-color: #f9f9f9; 
-    }
-    section[data-testid="stSidebar"] h1, 
-    section[data-testid="stSidebar"] h2, 
-    section[data-testid="stSidebar"] h3, 
-    section[data-testid="stSidebar"] label, 
-    section[data-testid="stSidebar"] .stMarkdown,
-    section[data-testid="stSidebar"] p {
-        color: #333333 !important;
-    }
+    section[data-testid="stSidebar"] { background-color: #f9f9f9; }
+    section[data-testid="stSidebar"] h1, section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3, section[data-testid="stSidebar"] label, section[data-testid="stSidebar"] .stMarkdown, section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] .stRadio div { color: #333333 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -116,34 +103,23 @@ def salva_log_gsheet(df):
     return False
 
 def calcola_stats_dettagliate(player, log):
-    """Calcola statistiche avanzate per singolo giocatore con soglie minime."""
     df_p = log[log['giocatori'].apply(lambda x: player in x)]
-    
-    if df_p.empty:
-        return None
+    if df_p.empty: return None
 
     totale_partite = len(df_p)
     vittorie = len(df_p[df_p['vincitori'].apply(lambda x: player in x)])
     win_rate = (vittorie / totale_partite) * 100
 
-    # Se non hai giocato abbastanza partite totali, non calcoliamo nemesis/partner
     if totale_partite < STATS_MIN_TOTAL_PG:
         msg = f"Dati insufficienti (<{STATS_MIN_TOTAL_PG} partite)"
-        return {
-            "wr": win_rate,
-            "best_partner": msg,
-            "nemesis": msg,
-            "totale_partite": totale_partite
-        }
+        return {"wr": win_rate, "best_partner": msg, "nemesis": msg, "totale_partite": totale_partite}
 
-    # Dizionari per contatori
-    compagni = {} # {nome: [vittorie_insieme, totale_insieme]}
-    avversari = {} # {nome: [vittorie_contro, totale_contro]}
+    compagni = {} 
+    avversari = {} 
 
     for row in df_p.itertuples():
         ha_vinto = player in row.vincitori
         
-        # Logica Compagni (Solo 2v2)
         if row.num_giocatori == 4:
             my_team = row.vincitori if ha_vinto else [p for p in row.giocatori if p not in row.vincitori]
             partners = [p for p in my_team if p != player]
@@ -153,52 +129,37 @@ def calcola_stats_dettagliate(player, log):
                 compagni[partner][1] += 1 
                 if ha_vinto: compagni[partner][0] += 1 
 
-        # Logica Avversari (Tutte le modalità)
         opponents = [p for p in row.giocatori if p not in row.vincitori] if ha_vinto else row.vincitori
         for opp in opponents:
             if opp not in avversari: avversari[opp] = [0, 0]
             avversari[opp][1] += 1 
             if ha_vinto: avversari[opp][0] += 1 
 
-    # --- Trova Miglior Compagno ---
     best_partner = f"Dati insufficienti (<{STATS_MIN_PAIR_PG} match)"
     best_partner_wr = -1
-    
     found_partner = False
     for p, stats in compagni.items():
-        if stats[1] >= STATS_MIN_PAIR_PG: # Soglia match insieme
+        if stats[1] >= STATS_MIN_PAIR_PG: 
             found_partner = True
             wr = (stats[0] / stats[1]) * 100
             if wr > best_partner_wr:
                 best_partner_wr = wr
                 best_partner = f"{p} ({wr:.0f}%)"
-    
-    if not found_partner and totale_partite >= STATS_MIN_TOTAL_PG:
-         best_partner = f"Nessun partner > {STATS_MIN_PAIR_PG} match"
+    if not found_partner and totale_partite >= STATS_MIN_TOTAL_PG: best_partner = f"Nessun partner > {STATS_MIN_PAIR_PG} match"
 
-    # --- Trova Bestia Nera (Nemesis) ---
     nemesis = f"Dati insufficienti (<{STATS_MIN_PAIR_PG} match)"
     nemesis_wr = 101
-    
     found_nemesis = False
     for p, stats in avversari.items():
-        if stats[1] >= STATS_MIN_PAIR_PG: # Soglia match contro
+        if stats[1] >= STATS_MIN_PAIR_PG: 
             found_nemesis = True
             wr = (stats[0] / stats[1]) * 100
-            # Cerchiamo il WR più basso (quindi perdo spesso)
             if wr < nemesis_wr:
                 nemesis_wr = wr
                 nemesis = f"{p} ({wr:.0f}%)"
+    if not found_nemesis and totale_partite >= STATS_MIN_TOTAL_PG: nemesis = f"Nessun avversario > {STATS_MIN_PAIR_PG} match"
 
-    if not found_nemesis and totale_partite >= STATS_MIN_TOTAL_PG:
-         nemesis = f"Nessun avversario > {STATS_MIN_PAIR_PG} match"
-
-    return {
-        "wr": win_rate,
-        "best_partner": best_partner,
-        "nemesis": nemesis,
-        "totale_partite": totale_partite
-    }
+    return {"wr": win_rate, "best_partner": best_partner, "nemesis": nemesis, "totale_partite": totale_partite}
 
 def ricalcola_classifica():
     log = st.session_state.get('log_partite', pd.DataFrame(columns=COLONNE_LOG))
@@ -215,7 +176,7 @@ def ricalcola_classifica():
         st.session_state.elo_history = elo_history_dict
         return
 
-    # MPP (Backend)
+    # MPP
     log_valido = log.dropna(subset=['giocatori', 'vincitori', 'data'])
     classifica_nuova['PG'].update(log_valido['giocatori'].explode().value_counts())
     
@@ -295,14 +256,7 @@ def inizializza_stato():
 
 def registra_partita(gs, vs, bonus):
     n = len(gs)
-    nv = len(vs)
-    if not gs: return st.sidebar.error("Seleziona giocatori")
-    if n < 2: return st.sidebar.error("Minimo 2 giocatori")
-    if not vs: return st.sidebar.error("Seleziona vincitore")
-    if (n in [2,3] and nv!=1) or (n==4 and nv!=2): return st.sidebar.error("Numero vincitori errato")
-    for v in vs: 
-        if v not in gs: return st.sidebar.error(f"{v} non ha giocato")
-        
+    
     row = pd.DataFrame([{
         "data": datetime.now(), "giorno_settimana": datetime.now().strftime('%A'),
         "giocatori": gs, "vincitori": vs, "num_giocatori": n,
@@ -333,18 +287,50 @@ def main():
     inizializza_stato()
     if not check_password(): st.stop()
 
-    # --- SIDEBAR ---
+    # --- SIDEBAR SEMPLIFICATA E DINAMICA ---
     with st.sidebar:
         st.title("📝 Registra")
-        with st.form("registra_form", clear_on_submit=True):
-            gs = st.multiselect("Giocatori", LISTA_GIOCATORI)
-            vs = st.multiselect("Vincitori", gs)
-            bonus = st.checkbox(f"Bonus >100 (+{PUNTI_BONUS_100})")
-            submitted = st.form_submit_button("💾 Salva Partita", use_container_width=True, type="primary")
-            
-            if submitted:
-                registra_partita(gs, vs, bonus)
         
+        # 1. Selezione Giocatori
+        gs = st.multiselect("1. Chi ha giocato?", LISTA_GIOCATORI, key="ms_giocatori")
+        
+        # 2. Selezione Vincitori (Dinamica)
+        vs = []
+        n = len(gs)
+        
+        if n == 2:
+            st.write("2. Chi ha vinto?")
+            winner = st.radio("Vincitore", gs, index=None, label_visibility="collapsed")
+            if winner: vs = [winner]
+            
+        elif n == 3:
+            st.write("2. Chi ha vinto?")
+            winner = st.radio("Vincitore", gs, index=None, label_visibility="collapsed")
+            if winner: vs = [winner]
+            
+        elif n == 4:
+            vs = st.multiselect("2. Chi ha vinto? (Seleziona 2)", gs, max_selections=2)
+            
+        elif n > 0:
+            st.warning("Seleziona 2, 3 o 4 giocatori per registrare.")
+
+        # 3. Bonus
+        bonus = st.checkbox(f"Bonus >100 (+{PUNTI_BONUS_100})")
+        
+        # 4. Bottone Invio
+        if st.button("💾 Salva Partita", use_container_width=True, type="primary"):
+            # Validazione pre-click
+            if n not in [2, 3, 4]:
+                st.error("Numero giocatori non valido")
+            elif (n in [2,3] and len(vs)!=1) or (n==4 and len(vs)!=2):
+                st.error("Seleziona il numero corretto di vincitori")
+            else:
+                successo = registra_partita(gs, vs, bonus)
+                if successo:
+                    # Reset manuale dei widget tramite session state (necessario senza Form)
+                    st.session_state.ms_giocatori = [] 
+                    st.rerun()
+
         st.markdown("---")
         with st.expander("⚙️ Amministrazione"):
             if st.button("🗑️ Elimina Ultima", use_container_width=True):
@@ -408,7 +394,7 @@ def main():
 
     st.markdown("---")
 
-    # --- NUOVA SEZIONE: STATISTICHE DETTAGLIATE GIOCATORI ---
+    # --- STATS DETTAGLIATE ---
     st.subheader("🕵️ Statistiche Giocatori")
     st.markdown(f"Dettagli (Min. {STATS_MIN_TOTAL_PG} partite totali, {STATS_MIN_PAIR_PG} partite per coppia)")
     

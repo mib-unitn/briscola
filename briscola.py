@@ -27,8 +27,8 @@ PUNTI_BONUS_100 = 0.5
 ELO_STARTING = 1000
 ELO_K_FACTOR = 32
 PODIO_MIN_PG = 20
-STATS_MIN_TOTAL_PG = 20 
-STATS_MIN_PAIR_PG = 5 
+STATS_MIN_TOTAL_PG = 25 
+STATS_MIN_PAIR_PG = 10 
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
 COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo"]
@@ -238,7 +238,6 @@ def ricalcola_classifica():
     st.session_state.elo_history = elo_history_dict
 
 def inizializza_stato():
-    if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
     if 'log_partite' not in st.session_state: st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
     if 'classifica' not in st.session_state:
         df = pd.DataFrame(0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:])
@@ -268,26 +267,18 @@ def registra_partita(gs, vs, bonus):
     st.toast(f"Vittoria registrata per {', '.join(vs)}!", icon="✅")
     return True
 
-def check_password():
-    if st.session_state.get("password_correct", False): return True
-    st.markdown("<h1 style='text-align: center;'>🔒 Accesso Protetto</h1>", unsafe_allow_html=True)
-    c1, c2, c3 = st.columns([1,2,1])
-    with c2:
-        pwd = st.text_input("Inserisci Password", type="password")
-        if st.button("Entra", use_container_width=True):
-            if pwd == st.secrets["credentials"]["password"]:
-                st.session_state["password_correct"] = True
-                st.rerun()
-            else: st.error("Password Errata")
-    return False
+# --- Funzione Callback per gestire il salvataggio ---
+def callback_salva(gs, vs, bonus, pwd_input):
+    # 1. Controllo Password
+    try:
+        if pwd_input != st.secrets["credentials"]["password"]:
+            st.session_state['temp_err'] = "⛔ Password errata!"
+            return
+    except:
+        st.session_state['temp_err'] = "Errore lettura secrets."
+        return
 
-# --- Funzione Callback per gestire il salvataggio senza errori ---
-def callback_salva(gs, vs, bonus):
-    """
-    Questa funzione viene eseguita PRIMA che la pagina venga ricaricata.
-    Qui possiamo modificare session_state senza causare errori.
-    """
-    # 1. Validazione
+    # 2. Validazione Dati
     n = len(gs)
     error_msg = None
     
@@ -296,25 +287,24 @@ def callback_salva(gs, vs, bonus):
     elif (n in [2,3] and len(vs)!=1) or (n==4 and len(vs)!=2):
         error_msg = "Seleziona il numero corretto di vincitori."
     
-    # Se c'è un errore, lo salviamo nello stato per mostrarlo dopo il reload
     if error_msg:
         st.session_state['temp_err'] = error_msg
         return
 
-    # 2. Registrazione
+    # 3. Registrazione
     successo = registra_partita(gs, vs, bonus)
     
-    # 3. Reset dei campi (Solo se successo)
+    # 4. Reset dei campi (Solo se successo)
     if successo:
-        st.session_state.ms_giocatori = [] # Ora questo è sicuro!
+        st.session_state.ms_giocatori = [] # Reset multiselect
         st.session_state.check_bonus = False
-        st.session_state['temp_err'] = None # Pulisci errori precedenti
+        st.session_state['temp_err'] = None # Pulisci errori
 
 # --- 3. UI Principale ---
 
 def main():
     inizializza_stato()
-    if not check_password(): st.stop()
+    # RIMOSSO: Check password globale. Ora è pubblico.
 
     # --- SIDEBAR ---
     with st.sidebar:
@@ -323,7 +313,7 @@ def main():
         # Mostra eventuali errori salvati dalla callback
         if 'temp_err' in st.session_state and st.session_state['temp_err']:
             st.error(st.session_state['temp_err'])
-            st.session_state['temp_err'] = None # Resetta dopo aver mostrato
+            st.session_state['temp_err'] = None 
         
         # 1. Selezione Giocatori
         gs = st.multiselect("1. Chi ha giocato?", LISTA_GIOCATORI, key="ms_giocatori")
@@ -348,32 +338,36 @@ def main():
         elif n > 0:
             st.warning("Seleziona 2, 3 o 4 giocatori.")
 
-        # 3. Bonus
+        # 3. Bonus & Password
         bonus = st.checkbox(f"Bonus >100 (+{PUNTI_BONUS_100})", key="check_bonus")
         
-        # 4. Bottone Invio con CALLBACK (args passa i valori attuali)
+        # Campo Password per la scrittura
+        admin_pwd = st.text_input("🔑 Password", type="password", key="pwd_input_write")
+        
+        # 4. Bottone Invio con CALLBACK
         st.button(
             "💾 Salva Partita", 
             use_container_width=True, 
             type="primary",
             on_click=callback_salva,
-            args=(gs, vs, bonus)
+            args=(gs, vs, bonus, admin_pwd)
         )
 
         st.markdown("---")
         with st.expander("⚙️ Amministrazione"):
             if st.button("🗑️ Elimina Ultima", use_container_width=True):
-                if not st.session_state.log_partite.empty:
-                    st.session_state.log_partite = st.session_state.log_partite.sort_values('data').iloc[:-1]
-                    salva_log_gsheet(st.session_state.log_partite)
-                    ricalcola_classifica()
-                    st.rerun()
-            if st.button("🔥 Reset Totale", use_container_width=True):
-                st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
-                salva_log_gsheet(st.session_state.log_partite)
-                st.session_state.elo_history = {}
-                ricalcola_classifica()
-                st.rerun()
+                # Controllo password anche qui
+                if admin_pwd == st.secrets["credentials"]["password"]:
+                    if not st.session_state.log_partite.empty:
+                        st.session_state.log_partite = st.session_state.log_partite.sort_values('data').iloc[:-1]
+                        salva_log_gsheet(st.session_state.log_partite)
+                        ricalcola_classifica()
+                        st.success("Partita eliminata!")
+                        st.rerun()
+                    else:
+                        st.error("Nessuna partita da eliminare.")
+                else:
+                    st.error("Password errata!")
 
     # --- MAIN PAGE ---
     st.markdown('<div class="main-title">🃏 Torneo Briscola</div>', unsafe_allow_html=True)

@@ -27,11 +27,16 @@ PUNTI_BONUS_100 = 0.5
 ELO_STARTING = 1000
 ELO_K_FACTOR = 48
 PODIO_MIN_PG = 20
-STATS_MIN_TOTAL_PG = 20
-STATS_MIN_PAIR_PG = 8
+STATS_MIN_TOTAL_PG = 25
+STATS_MIN_PAIR_PG = 10
+
+# --- CONFIGURAZIONE DECADIMENTO (DECAY) ---
+DECAY_GIORNI_GRAZIA = 21  # Giorni di inattività prima di essere nascosti/penalizzati
+DECAY_PUNTI_GIORNO = 1    # Punti persi al giorno
+DECAY_MIN_ELO = 800       # Floor Elo
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
-COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo"]
+COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo", "UltimaPartita"]
 
 # --- 2. CUSTOM CSS & STYLING ---
 st.markdown("""
@@ -98,37 +103,7 @@ st.markdown("""
     .silver { border-top: 6px solid #C0C0C0; background: linear-gradient(180deg, #fff 0%, #f8f9fa 100%); }
     /* Bronze Styling */
     .bronze { border-top: 6px solid #CD7F32; background: linear-gradient(180deg, #fff 0%, #fff5f0 100%); }
-
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #f8f9fa;
-        border-right: 1px solid #eee;
-    }
     
-    /* Input Styling */
-    .stTextInput input {
-        border-radius: 10px;
-    }
-    
-    /* Tabs Styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2px;
-        background-color: transparent;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        border-radius: 10px 10px 0px 0px;
-        gap: 1px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #fff;
-        color: #FF4B4B;
-        border-top: 2px solid #FF4B4B;
-    }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -226,13 +201,31 @@ def calcola_stats_dettagliate(player, log):
 
     return {"wr": wr, "best_partner": bp, "nemesis": nem, "totale": totale}
 
+def applica_decadimento(elo_attuale, data_ultima_partita, data_riferimento):
+    """Calcola il nuovo Elo applicando il decadimento basato sul tempo."""
+    if pd.isna(data_ultima_partita) or pd.isna(data_riferimento):
+        return elo_attuale
+    
+    giorni_passati = (data_riferimento - data_ultima_partita).days
+    
+    if giorni_passati > DECAY_GIORNI_GRAZIA:
+        giorni_over = giorni_passati - DECAY_GIORNI_GRAZIA
+        malus = giorni_over * DECAY_PUNTI_GIORNO
+        nuovo_elo = max(DECAY_MIN_ELO, elo_attuale - malus)
+        return min(elo_attuale, nuovo_elo)
+    
+    return elo_attuale
+
 def ricalcola_classifica():
     log = st.session_state.get('log_partite', pd.DataFrame(columns=COLONNE_LOG))
     df = pd.DataFrame(0.0, index=LISTA_GIOCATORI, columns=COLONNE_CLASSIFICA[1:])
     df['PG'], df['Elo'] = 0, ELO_STARTING
+    df['UltimaPartita'] = pd.NaT 
     
     elo_hist = {p: [{'GameNum': 0, 'Elo': ELO_STARTING}] for p in LISTA_GIOCATORI}
     p_games = {p: 0 for p in LISTA_GIOCATORI}
+    
+    last_activity = {p: None for p in LISTA_GIOCATORI}
 
     if log.empty or log.dropna(subset=['data']).empty:
         st.session_state.classifica = df.reset_index().rename(columns={'index': 'Giocatore'})
@@ -253,15 +246,25 @@ def ricalcola_classifica():
     
     df['MPP'] = np.where(df['PG'] > 0, df['PT'] / df['PG'], 0).round(3)
 
-    # Elo Logic
+    # Elo Logic con Decadimento
     log_elo = log_val.sort_values('data', ascending=True)
     curr_elo = df['Elo'].to_dict()
     
+    start_date = log_elo.iloc[0]['data']
+    for p in LISTA_GIOCATORI: last_activity[p] = start_date
+
     for row in log_elo.itertuples():
+        match_date = row.data
         gs, vs, n = row.giocatori, row.vincitori, row.num_giocatori
         ps = [p for p in gs if p not in vs]
-        gm = []
-
+        gm = gs 
+        
+        # 1. Decadimento PRE-MATCH
+        for p in gm:
+            if last_activity[p] is not None:
+                curr_elo[p] = applica_decadimento(curr_elo[p], last_activity[p], match_date)
+        
+        # 2. Calcolo Elo Match
         try:
             if n == 2:
                 w, l = vs[0], ps[0]
@@ -269,7 +272,6 @@ def ricalcola_classifica():
                 e = 1 / (1 + 10**((rl - rw) / 400))
                 d = ELO_K_FACTOR * (1 - e)
                 curr_elo[w] += d; curr_elo[l] -= d
-                gm = [w, l]
             elif n == 4:
                 rw = (curr_elo[vs[0]] + curr_elo[vs[1]]) / 2
                 rl = (curr_elo[ps[0]] + curr_elo[ps[1]]) / 2
@@ -277,7 +279,6 @@ def ricalcola_classifica():
                 d = ELO_K_FACTOR * (1 - e)
                 curr_elo[vs[0]] += d; curr_elo[vs[1]] += d
                 curr_elo[ps[0]] -= d; curr_elo[ps[1]] -= d
-                gm = vs + ps
             elif n == 3:
                 w, l1, l2 = vs[0], ps[0], ps[1]
                 rw = curr_elo[w]
@@ -286,13 +287,21 @@ def ricalcola_classifica():
                 d = ELO_K_FACTOR * (1 - e)
                 curr_elo[w] += d
                 curr_elo[l1] -= d/2; curr_elo[l2] -= d/2
-                gm = [w, l1, l2]
             
+            # 3. Aggiorna date e storico
             for p in gm:
+                last_activity[p] = match_date
                 p_games[p] += 1
                 elo_hist[p].append({'GameNum': p_games[p], 'Elo': int(round(curr_elo[p]))})
         except: continue
-        
+
+    # 4. Decadimento FINALE (fino a Oggi)
+    now = datetime.now()
+    for p in LISTA_GIOCATORI:
+        if last_activity[p] is not None:
+            curr_elo[p] = applica_decadimento(curr_elo[p], last_activity[p], now)
+            df.loc[p, 'UltimaPartita'] = last_activity[p]
+
     df['Elo'] = df.index.map(curr_elo).round(0).astype(int)
     st.session_state.classifica = df.reset_index().rename(columns={'index': 'Giocatore'})
     st.session_state.elo_history = elo_hist
@@ -396,7 +405,7 @@ def main():
 
     # --- HEADER ---
     st.markdown('<div class="hero-title">♠️ Briscola League</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="hero-subtitle">Official Elo Rankings • Season 1</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="hero-subtitle">Official Elo Rankings • Inactive players (> {DECAY_GIORNI_GRAZIA} days) are hidden</div>', unsafe_allow_html=True)
 
     df = st.session_state.classifica.copy()
     
@@ -405,8 +414,17 @@ def main():
 
     # --- TAB 1: LEADERBOARD ---
     with tab1:
-        # PODIUM HTML
-        podio = df[df['PG'] >= PODIO_MIN_PG].sort_values(by=["Elo", "PG"], ascending=[False, True]).reset_index(drop=True)
+        # FILTER ACTIVE PLAYERS
+        now = datetime.now()
+        cutoff_date = now - timedelta(days=DECAY_GIORNI_GRAZIA)
+        
+        # Filtra: Mantieni chi ha giocato recentemente (>= cutoff) OPPURE chi non ha mai giocato (NaT)
+        # Nota: Chi ha NaT (0 partite) viene solitamente escluso dal filtro PG dopo.
+        mask_active = (df['UltimaPartita'] >= cutoff_date) | (df['UltimaPartita'].isna())
+        df_active = df[mask_active].copy()
+
+        # PODIUM HTML (su df_active)
+        podio = df_active[df_active['PG'] >= PODIO_MIN_PG].sort_values(by=["Elo", "PG"], ascending=[False, True]).reset_index(drop=True)
         
         if not podio.empty:
             cols = st.columns(3)
@@ -424,26 +442,28 @@ def main():
                     </div>
                     """, unsafe_allow_html=True)
         else:
-            st.info(f"No players have reached {PODIO_MIN_PG} matches yet to qualify for the Elite Podium.")
+            st.info(f"No active players have reached {PODIO_MIN_PG} matches for the Elite Podium.")
 
         st.markdown("<br>", unsafe_allow_html=True)
         
-        # TABLE
-        st.markdown("### 📊 Live Standings")
+        # TABLE (su df_active)
+        st.markdown("### 📊 Active Players")
         col_filter, col_spacer = st.columns([1, 2])
         with col_filter:
-            min_pg = st.slider("Filter by Min. Matches", 0, int(df['PG'].max()) if not df.empty else 0, 2)
+            # Slider max su df_active per coerenza
+            max_pg_slider = int(df_active['PG'].max()) if not df_active.empty else 0
+            min_pg = st.slider("Filter by Min. Matches", 0, max_pg_slider, 2)
         
-        df_show = df[df['PG'] >= min_pg].sort_values(["Elo", "PG"], ascending=[False, True])
+        df_show = df_active[df_active['PG'] >= min_pg].sort_values(["Elo", "PG"], ascending=[False, True])
         
-        # Add a Rank column
+        # Add Rank
         df_show.insert(0, 'Rank', range(1, 1 + len(df_show)))
 
         st.dataframe(
             df_show,
             use_container_width=True,
             hide_index=True,
-            column_order=["Rank", "Giocatore", "Elo", "PG", "PT", "MPP"],
+            column_order=["Rank", "Giocatore", "Elo", "PG", "PT", "MPP", "UltimaPartita"],
             column_config={
                 "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
                 "Giocatore": st.column_config.TextColumn("Player", width="medium"),
@@ -451,6 +471,7 @@ def main():
                 "PG": st.column_config.NumberColumn("Matches", format="%d"),
                 "PT": st.column_config.NumberColumn("Points", format="%.1f"),
                 "MPP": st.column_config.NumberColumn("Avg Pts", format="%.2f"),
+                "UltimaPartita": st.column_config.DateColumn("Last Match", format="DD/MM/YYYY")
             }
         )
 
@@ -460,12 +481,12 @@ def main():
         
         with c1:
             st.markdown("### 📈 Elo History")
+            # Top players selection from ALL players (history is history)
             top_pl = df.sort_values("Elo", ascending=False).head(5)['Giocatore'].tolist()
             sel_pl = st.multiselect("Compare Players", LISTA_GIOCATORI, default=top_pl)
             
             if sel_pl:
                 all_data = []
-                # Determine Y axis scale
                 all_vals = []
                 for p in st.session_state.elo_history:
                     for r in st.session_state.elo_history[p]: all_vals.append(r['Elo'])

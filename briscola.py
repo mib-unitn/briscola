@@ -19,21 +19,21 @@ st.set_page_config(
 
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ea2DT-FlYmq_TjA4MFqdc1rr3GFj1MxpVfWm0MQxrQo/edit?gid=0#gid=0"
 
-LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Esteban", "Giampaolo"]
+LISTA_GIOCATORI = ["Michele", "Federico", "Lorenza", "Grazia", "Pierpaolo", "Niccolò", "Simone", "Avinash", "Sahil", "Massine", "Beppe", "Guest", "Giampaolo"]
 
 PUNTI_MAP = {2: 2, 3: 3, 4: 2}
 PUNTI_BONUS_100 = 0.5
 
 ELO_STARTING = 1000
-ELO_K_FACTOR = 48
-PODIO_MIN_PG = 20
+ELO_K_FACTOR = 32
+PODIO_MIN_PG = 40
 STATS_MIN_TOTAL_PG = 25
 STATS_MIN_PAIR_PG = 10
 
 # --- CONFIGURAZIONE DECADIMENTO (DECAY) ---
-DECAY_GIORNI_GRAZIA = 21  # Giorni di inattività prima di essere nascosti/penalizzati
-DECAY_PUNTI_GIORNO = 1    # Punti persi al giorno
-DECAY_MIN_ELO = 800       # Floor Elo
+DECAY_GIORNI_GRAZIA = 10  # Giorni di inattività prima di essere nascosti/penalizzati
+DECAY_PUNTI_GIORNO = 5    # Punti persi al giorno
+DECAY_MIN_ELO = 750       # Floor Elo
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
 COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo", "UltimaPartita"]

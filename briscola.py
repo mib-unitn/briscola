@@ -34,7 +34,7 @@ DECAY_PUNTI_GIORNO = 1
 DECAY_MIN_ELO = 800
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
-COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo", "UltimaPartita"]
+COLONNE_CLASSIFICA = ["Giocatore", "PG", "PG2", "PG3", "PG4", "V2", "V3", "V4", "PT", "MPP", "Elo", "UltimaPartita"]
 
 # --- 2. CUSTOM CSS & STYLING ---
 st.markdown("""
@@ -52,6 +52,12 @@ st.markdown("""
     .gold { border-top: 6px solid #FFD700; background: linear-gradient(180deg, #fff 0%, #fffdf0 100%); }
     .silver { border-top: 6px solid #C0C0C0; background: linear-gradient(180deg, #fff 0%, #f8f9fa 100%); }
     .bronze { border-top: 6px solid #CD7F32; background: linear-gradient(180deg, #fff 0%, #fff5f0 100%); }
+    .stat-card { background: white; border-radius: 15px; padding: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; margin-bottom: 15px; }
+    .stat-title { font-size: 0.85rem; color: #888; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 5px; }
+    .stat-value { font-size: 1.6rem; font-weight: 800; color: #333; margin-bottom: 2px; }
+    .stat-player { font-size: 1rem; font-weight: 600; color: #FF4B4B; }
+    .stat-best { border-top: 4px solid #4CAF50; background: linear-gradient(180deg, #fff 0%, #f4fbf4 100%); }
+    .stat-worst { border-top: 4px solid #F44336; background: linear-gradient(180deg, #fff 0%, #fef4f4 100%); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -59,7 +65,15 @@ st.markdown("""
 
 def connect_to_gsheet():
     try:
-        gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        try:
+            gcp_cred = dict(st.secrets["connections"]["gsheets"])
+        except (KeyError, AttributeError):
+            gcp_cred = dict(st.secrets["gcp_service_account"])
+            
+        if "private_key" in gcp_cred:
+            gcp_cred["private_key"] = gcp_cred["private_key"].replace("\\n", "\n")
+            
+        gc = gspread.service_account_from_dict(gcp_cred)
         sh = gc.open_by_url(GOOGLE_SHEET_URL)
         return sh
     except Exception as e:
@@ -160,6 +174,156 @@ def calcola_stats_dettagliate(player, log):
             if curr_wr < nem_wr: nem, nem_wr = f"{p} ({curr_wr:.0f}%)", curr_wr
     return {"wr": wr, "best_partner": bp, "nemesis": nem, "totale": totale}
 
+def calcola_stats_mensili(log, elo_hist):
+    if log.empty or 'data' not in log.columns: return {}
+    log_v = log.dropna(subset=['data', 'giocatori', 'vincitori']).copy()
+    if log_v.empty: return {}
+    
+    log_v['mese'] = log_v['data'].dt.to_period('M')
+    mesi = sorted(log_v['mese'].unique(), reverse=True)
+    
+    stats_mensili = {}
+    for m in mesi:
+        df_m = log_v[log_v['mese'] == m]
+        giocatori_mese = set()
+        for gs in df_m['giocatori']:
+            if isinstance(gs, list): giocatori_mese.update(gs)
+            
+        if not giocatori_mese: continue
+        
+        wins_tot = {p: 0 for p in giocatori_mese}
+        wins_2 = {p: 0 for p in giocatori_mese}
+        wins_3 = {p: 0 for p in giocatori_mese}
+        wins_4 = {p: 0 for p in giocatori_mese}
+        punti_tot = {p: 0.0 for p in giocatori_mese}
+        
+        losses_tot = {p: 0 for p in giocatori_mese}
+        losses_2 = {p: 0 for p in giocatori_mese}
+        losses_3 = {p: 0 for p in giocatori_mese}
+        losses_4 = {p: 0 for p in giocatori_mese}
+        punti_lost = {p: 0.0 for p in giocatori_mese}
+        
+        for row in df_m.itertuples():
+            gs = row.giocatori
+            vs = row.vincitori
+            n = row.num_giocatori
+            pts = row.punti_vittoria + row.punti_bonus
+            if not isinstance(gs, list) or not isinstance(vs, list): continue
+            
+            losers = [p for p in gs if p not in vs]
+            
+            for v in vs:
+                if v in giocatori_mese:
+                    wins_tot[v] += 1
+                    punti_tot[v] += pts
+                    if n == 2: wins_2[v] += 1
+                    elif n == 3: wins_3[v] += 1
+                    elif n == 4: wins_4[v] += 1
+            
+            for l in losers:
+                if l in giocatori_mese:
+                    losses_tot[l] += 1
+                    punti_lost[l] += pts
+                    if n == 2: losses_2[l] += 1
+                    elif n == 3: losses_3[l] += 1
+                    elif n == 4: losses_4[l] += 1
+                        
+        elo_gain = {p: 0 for p in giocatori_mese}
+        start_m = m.start_time
+        end_m = m.end_time
+        
+        for p in giocatori_mese:
+            if p in elo_hist:
+                hist = elo_hist[p]
+                elo_before = ELO_STARTING
+                elo_end = ELO_STARTING
+                for record in hist:
+                    r_date = record.get('Date')
+                    if pd.isna(r_date): continue
+                    if r_date < start_m: elo_before = record['Elo']
+                    if r_date <= end_m: elo_end = record['Elo']
+                elo_gain[p] = elo_end - elo_before
+                
+        def get_top(metric_dict, is_float=False, get_min=False):
+            if not metric_dict: return ("N/A", "0")
+            target_val = min(metric_dict.values()) if get_min else max(metric_dict.values())
+            players = [p for p, v in metric_dict.items() if v == target_val]
+            fmt = lambda v: f"{v:.1f}" if is_float else str(v)
+            return (", ".join(players), fmt(target_val))
+            
+        w_tot_b = get_top(wins_tot)
+        w_2_b = get_top(wins_2)
+        w_3_b = get_top(wins_3)
+        w_4_b = get_top(wins_4)
+        pt_tot_b = get_top(punti_tot, is_float=True)
+        elo_b = get_top(elo_gain)
+        
+        l_tot_w = get_top(losses_tot)
+        l_2_w = get_top(losses_2)
+        l_3_w = get_top(losses_3)
+        l_4_w = get_top(losses_4)
+        pt_lost_w = get_top(punti_lost, is_float=True)
+        elo_w = get_top(elo_gain, get_min=True)
+        
+        pt_gain_fmt = (pt_tot_b[0], f"+{pt_tot_b[1]}" if float(pt_tot_b[1]) > 0 else pt_tot_b[1])
+        pt_lost_fmt = (pt_lost_w[0], f"-{pt_lost_w[1]}" if float(pt_lost_w[1]) > 0 else pt_lost_w[1])
+        
+        stats_mensili[m.strftime("%B %Y")] = {
+            "best": {
+                "Overall Wins": w_tot_b, "2P Wins": w_2_b, "3P Wins": w_3_b, 
+                "4P Wins": w_4_b, "Points": pt_gain_fmt, "Elo Gain": (elo_b[0], f"+{elo_b[1]}" if float(elo_b[1])>0 else elo_b[1])
+            },
+            "worst": {
+                "Overall Losses": l_tot_w, "2P Losses": l_2_w, "3P Losses": l_3_w, 
+                "4P Losses": l_4_w, "Points Lost": pt_lost_fmt, "Elo Gain": elo_w
+            }
+        }
+        
+    return stats_mensili
+
+@st.cache_data
+def calcola_ranking_storico(elo_hist_dict):
+    all_dates = set()
+    for p, hist in elo_hist_dict.items():
+        for r in hist:
+            d = r.get('Date')
+            if pd.notna(d):
+                all_dates.add(pd.Timestamp(d).date())
+                
+    if not all_dates: return pd.DataFrame()
+    
+    sorted_dates = sorted(list(all_dates))
+    
+    player_updates = {}
+    for p, hist in elo_hist_dict.items():
+        daily_elos = {}
+        for r in hist:
+            d = r.get('Date')
+            if pd.notna(d):
+                daily_elos[pd.Timestamp(d).date()] = r['Elo']
+        if daily_elos:
+            player_updates[p] = sorted(daily_elos.items(), key=lambda x: x[0])
+            
+    timeline_data = []
+    current_elos = {}
+    
+    for d in sorted_dates:
+        for p, updates in player_updates.items():
+            for ud, ue in updates:
+                if ud == d:
+                    current_elos[p] = ue
+                elif ud > d: break
+                    
+        sorted_players = sorted(current_elos.items(), key=lambda x: x[1], reverse=True)
+        for rank, (p, e) in enumerate(sorted_players, start=1):
+            timeline_data.append({
+                'Date': str(d),
+                'Player': p,
+                'Rank': rank
+            })
+            
+    return pd.DataFrame(timeline_data)
+
 def applica_decadimento(elo_attuale, data_ultima_partita, data_riferimento):
     if pd.isna(data_ultima_partita) or pd.isna(data_riferimento): return elo_attuale
     giorni_passati = (data_riferimento - data_ultima_partita).days
@@ -191,6 +355,13 @@ def ricalcola_classifica():
 
     log_val = log.dropna(subset=['giocatori', 'vincitori', 'data'])
     df['PG'].update(log_val['giocatori'].explode().value_counts())
+    
+    for n_players in [2, 3, 4]:
+        col_pg = f'PG{n_players}'
+        sub_log = log_val[log_val['num_giocatori'] == n_players]
+        if not sub_log.empty:
+            df[col_pg].update(sub_log['giocatori'].explode().value_counts())
+
     for row in log_val.itertuples():
         col_v = f'V{int(row.num_giocatori)}'
         if col_v in df.columns and isinstance(row.vincitori, list):
@@ -242,8 +413,8 @@ def ricalcola_classifica():
             for p in gm:
                 last_activity[p] = match_date
                 p_games[p] += 1
-                if p not in elo_hist: elo_hist[p] = [{'GameNum': 0, 'Elo': ELO_STARTING}]
-                elo_hist[p].append({'GameNum': p_games[p], 'Elo': int(round(curr_elo[p]))})
+                if p not in elo_hist: elo_hist[p] = [{'GameNum': 0, 'Elo': ELO_STARTING, 'Date': start_date}]
+                elo_hist[p].append({'GameNum': p_games[p], 'Elo': int(round(curr_elo[p])), 'Date': match_date})
         except Exception: continue
 
     now = datetime.now()
@@ -258,6 +429,11 @@ def ricalcola_classifica():
 
 def inizializza_stato():
     if 'log_caricato' not in st.session_state: st.session_state.log_caricato = False
+    if 'classifica' not in st.session_state: st.session_state.classifica = pd.DataFrame(columns=COLONNE_CLASSIFICA)
+    if 'elo_history' not in st.session_state: st.session_state.elo_history = {}
+    if 'log_partite' not in st.session_state: st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
+    if 'lista_giocatori' not in st.session_state: st.session_state.lista_giocatori = []
+    
     if 'gs_sh' not in st.session_state:
         st.session_state.gs_sh = connect_to_gsheet()
         if st.session_state.gs_sh:
@@ -416,7 +592,7 @@ def main():
     df = st.session_state.classifica.copy()
     
     # --- TABS LAYOUT ---
-    tab1, tab2, tab3 = st.tabs(["🏆 Leaderboard", "📈 Analytics", "📝 Log"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🏆 Leaderboard", "📈 Analytics", "📝 Log", "📊 Statistics"])
 
     # --- TAB 1: LEADERBOARD ---
     with tab1:
@@ -476,6 +652,24 @@ def main():
                     ymin, ymax = (df_chart['Elo'].min()-20, df_chart['Elo'].max()+20)
                     chart = alt.Chart(df_chart).mark_line(point=True, strokeWidth=3).encode(x=alt.X('Match'), y=alt.Y('Elo', scale=alt.Scale(domain=[ymin, ymax])), color='Player', tooltip=['Player', 'Match', 'Elo']).interactive()
                     st.altair_chart(chart, use_container_width=True)
+                    
+            st.markdown("---")
+            st.markdown("### 🏆 Daily Ranking History")
+            sel_rank_pl = st.multiselect("Compare Players (Ranking)", lista_attuale, default=top_pl, key="ms_rank")
+            if sel_rank_pl:
+                df_rank = calcola_ranking_storico(st.session_state.elo_history)
+                if not df_rank.empty:
+                    df_rank_filt = df_rank[df_rank['Player'].isin(sel_rank_pl)]
+                    if not df_rank_filt.empty:
+                        max_rank = df_rank_filt['Rank'].max()
+                        rank_chart = alt.Chart(df_rank_filt).mark_line(point=True, strokeWidth=3).encode(
+                            x=alt.X('Date:T', title="Date"),
+                            y=alt.Y('Rank:Q', scale=alt.Scale(domain=[max_rank + 0.5, 0.5]), 
+                                    axis=alt.Axis(tickMinStep=1, format="d")),
+                            color='Player:N',
+                            tooltip=['Player', 'Date', 'Rank']
+                        ).interactive()
+                        st.altair_chart(rank_chart, use_container_width=True)
 
         with c2:
             st.markdown("### 🕵️ Player Insights")
@@ -492,6 +686,103 @@ def main():
     with tab3:
         if not st.session_state.log_partite.empty:
             st.dataframe(st.session_state.log_partite.sort_values('data', ascending=False), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DatetimeColumn("Timestamp", format="DD/MM/YY HH:mm")})
+
+    # --- TAB 4: STATISTICS ---
+    with tab4:
+        st.markdown("### 📊 Statistics by Match Type")
+        
+        col_filter_stat, _ = st.columns([1, 2])
+        with col_filter_stat:
+            max_stat_pg = 0
+            if not df_active.empty and 'PG2' in df_active.columns:
+                max_stat_pg = int(df_active[['PG2', 'PG3', 'PG4']].fillna(0).max().max())
+            
+            # Prevent slider error if max value is strictly smaller than the default value 2
+            slider_default = min(10, max_stat_pg) 
+            min_pg_stat = st.slider("Filter by Min. Category Matches", 0, max_stat_pg, slider_default)
+            
+        # st.markdown("<br>", unsafe_allow_html=True)
+        
+        sub_t2, sub_t3, sub_t4 = st.tabs(["2 Players", "3 Players", "4 Players"])
+        
+        for n, t in zip([2, 3, 4], [sub_t2, sub_t3, sub_t4]):
+            with t:
+                df_mode = df_active[df_active[f'PG{n}'] >= min_pg_stat].copy()
+                if not df_mode.empty:
+                    df_mode['WR'] = (df_mode[f'V{n}'] / df_mode[f'PG{n}'] * 100).round(1)
+                    df_mode = df_mode.sort_values(['WR', f'PG{n}'], ascending=[False, False])
+                    df_mode.insert(0, 'Rank', range(1, 1 + len(df_mode)))
+                    
+                    st.dataframe(
+                        df_mode,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_order=["Rank", "Giocatore", f"PG{n}", f"V{n}", "WR", "Elo", "UltimaPartita"],
+                        column_config={
+                            "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
+                            "Giocatore": st.column_config.TextColumn("Player", width="medium"),
+                            f"PG{n}": st.column_config.NumberColumn("Matches", format="%d"),
+                            f"V{n}": st.column_config.NumberColumn("Wins", format="%d"),
+                            "WR": st.column_config.ProgressColumn("Win Rate %", format="%.1f%%", min_value=0, max_value=100),
+                            "Elo": st.column_config.NumberColumn("Elo", format="%d"),
+                            "UltimaPartita": st.column_config.DateColumn("Last Match", format="DD/MM/YYYY")
+                        }
+                    )
+                else:
+                    st.info(f"No match data available for {n}-player matches.")
+
+        st.markdown("---")
+        st.markdown("### 📅 Monthly Statistics")
+        
+        mensili = calcola_stats_mensili(st.session_state.log_partite, st.session_state.elo_history)
+        if mensili:
+            for mese, stats in mensili.items():
+                with st.expander(f"{mese} Overview", expanded=(mese == list(mensili.keys())[0])):
+                    st.markdown("#### 🏆 Best Monthly Performers")
+                    b1, b2, b3 = st.columns(3)
+                    with b1:
+                        p, v = stats['best']['Overall Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">Overall Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b2:
+                        p, v = stats['best']['Points']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">Total Points Gain</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b3:
+                        p, v = stats['best']['Elo Gain']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">Elo Gain</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                        
+                    b4, b5, b6 = st.columns(3)
+                    with b4:
+                        p, v = stats['best']['2P Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">2-Player Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b5:
+                        p, v = stats['best']['3P Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">3-Player Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b6:
+                        p, v = stats['best']['4P Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">4-Player Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+
+                    st.markdown("#### 📉 Worst Monthly Performers")
+                    w1, w2, w3 = st.columns(3)
+                    with w1:
+                        p, v = stats['worst']['Overall Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">Overall Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w2:
+                        p, v = stats['worst']['Points Lost']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">Total Points Lost</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w3:
+                        p, v = stats['worst']['Elo Gain']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">Elo Loss</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                        
+                    w4, w5, w6 = st.columns(3)
+                    with w4:
+                        p, v = stats['worst']['2P Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">2-Player Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w5:
+                        p, v = stats['worst']['3P Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">3-Player Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w6:
+                        p, v = stats['worst']['4P Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">4-Player Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

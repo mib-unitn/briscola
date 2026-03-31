@@ -34,7 +34,7 @@ DECAY_PUNTI_GIORNO = 1
 DECAY_MIN_ELO = 800
 
 COLONNE_LOG = ["data", "giorno_settimana", "giocatori", "vincitori", "num_giocatori", "punti_vittoria", "punti_bonus"]
-COLONNE_CLASSIFICA = ["Giocatore", "PG", "V2", "V3", "V4", "PT", "MPP", "Elo", "UltimaPartita"]
+COLONNE_CLASSIFICA = ["Giocatore", "PG", "PG2", "PG3", "PG4", "V2", "V3", "V4", "PT", "MPP", "Elo", "UltimaPartita"]
 
 # --- 2. CUSTOM CSS & STYLING ---
 st.markdown("""
@@ -59,7 +59,15 @@ st.markdown("""
 
 def connect_to_gsheet():
     try:
-        gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+        try:
+            gcp_cred = dict(st.secrets["connections"]["gsheets"])
+        except (KeyError, AttributeError):
+            gcp_cred = dict(st.secrets["gcp_service_account"])
+            
+        if "private_key" in gcp_cred:
+            gcp_cred["private_key"] = gcp_cred["private_key"].replace("\\n", "\n")
+            
+        gc = gspread.service_account_from_dict(gcp_cred)
         sh = gc.open_by_url(GOOGLE_SHEET_URL)
         return sh
     except Exception as e:
@@ -191,6 +199,13 @@ def ricalcola_classifica():
 
     log_val = log.dropna(subset=['giocatori', 'vincitori', 'data'])
     df['PG'].update(log_val['giocatori'].explode().value_counts())
+    
+    for n_players in [2, 3, 4]:
+        col_pg = f'PG{n_players}'
+        sub_log = log_val[log_val['num_giocatori'] == n_players]
+        if not sub_log.empty:
+            df[col_pg].update(sub_log['giocatori'].explode().value_counts())
+
     for row in log_val.itertuples():
         col_v = f'V{int(row.num_giocatori)}'
         if col_v in df.columns and isinstance(row.vincitori, list):
@@ -258,6 +273,11 @@ def ricalcola_classifica():
 
 def inizializza_stato():
     if 'log_caricato' not in st.session_state: st.session_state.log_caricato = False
+    if 'classifica' not in st.session_state: st.session_state.classifica = pd.DataFrame(columns=COLONNE_CLASSIFICA)
+    if 'elo_history' not in st.session_state: st.session_state.elo_history = {}
+    if 'log_partite' not in st.session_state: st.session_state.log_partite = pd.DataFrame(columns=COLONNE_LOG)
+    if 'lista_giocatori' not in st.session_state: st.session_state.lista_giocatori = []
+    
     if 'gs_sh' not in st.session_state:
         st.session_state.gs_sh = connect_to_gsheet()
         if st.session_state.gs_sh:
@@ -416,7 +436,7 @@ def main():
     df = st.session_state.classifica.copy()
     
     # --- TABS LAYOUT ---
-    tab1, tab2, tab3 = st.tabs(["🏆 Leaderboard", "📈 Analytics", "📝 Log"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🏆 Leaderboard", "📈 Analytics", "📝 Log", "📊 Statistics"])
 
     # --- TAB 1: LEADERBOARD ---
     with tab1:
@@ -492,6 +512,50 @@ def main():
     with tab3:
         if not st.session_state.log_partite.empty:
             st.dataframe(st.session_state.log_partite.sort_values('data', ascending=False), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DatetimeColumn("Timestamp", format="DD/MM/YY HH:mm")})
+
+    # --- TAB 4: STATISTICS ---
+    with tab4:
+        st.markdown("### 📊 Statistics by Match Type")
+        
+        col_filter_stat, _ = st.columns([1, 2])
+        with col_filter_stat:
+            max_stat_pg = 0
+            if not df_active.empty and 'PG2' in df_active.columns:
+                max_stat_pg = int(df_active[['PG2', 'PG3', 'PG4']].fillna(0).max().max())
+            
+            # Prevent slider error if max value is strictly smaller than the default value 2
+            slider_default = min(10, max_stat_pg) 
+            min_pg_stat = st.slider("Filter by Min. Category Matches", 0, max_stat_pg, slider_default)
+            
+        # st.markdown("<br>", unsafe_allow_html=True)
+        
+        sub_t2, sub_t3, sub_t4 = st.tabs(["2 Players", "3 Players", "4 Players"])
+        
+        for n, t in zip([2, 3, 4], [sub_t2, sub_t3, sub_t4]):
+            with t:
+                df_mode = df_active[df_active[f'PG{n}'] >= min_pg_stat].copy()
+                if not df_mode.empty:
+                    df_mode['WR'] = (df_mode[f'V{n}'] / df_mode[f'PG{n}'] * 100).round(1)
+                    df_mode = df_mode.sort_values(['WR', f'PG{n}'], ascending=[False, False])
+                    df_mode.insert(0, 'Rank', range(1, 1 + len(df_mode)))
+                    
+                    st.dataframe(
+                        df_mode,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_order=["Rank", "Giocatore", f"PG{n}", f"V{n}", "WR", "Elo", "UltimaPartita"],
+                        column_config={
+                            "Rank": st.column_config.NumberColumn("#", format="%d", width="small"),
+                            "Giocatore": st.column_config.TextColumn("Player", width="medium"),
+                            f"PG{n}": st.column_config.NumberColumn("Matches", format="%d"),
+                            f"V{n}": st.column_config.NumberColumn("Wins", format="%d"),
+                            "WR": st.column_config.ProgressColumn("Win Rate %", format="%.1f%%", min_value=0, max_value=100),
+                            "Elo": st.column_config.NumberColumn("Elo", format="%d"),
+                            "UltimaPartita": st.column_config.DateColumn("Last Match", format="DD/MM/YYYY")
+                        }
+                    )
+                else:
+                    st.info(f"No match data available for {n}-player matches.")
 
 if __name__ == "__main__":
     main()

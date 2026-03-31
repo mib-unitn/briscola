@@ -52,6 +52,12 @@ st.markdown("""
     .gold { border-top: 6px solid #FFD700; background: linear-gradient(180deg, #fff 0%, #fffdf0 100%); }
     .silver { border-top: 6px solid #C0C0C0; background: linear-gradient(180deg, #fff 0%, #f8f9fa 100%); }
     .bronze { border-top: 6px solid #CD7F32; background: linear-gradient(180deg, #fff 0%, #fff5f0 100%); }
+    .stat-card { background: white; border-radius: 15px; padding: 15px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.05); border: 1px solid #f0f0f0; margin-bottom: 15px; }
+    .stat-title { font-size: 0.85rem; color: #888; text-transform: uppercase; font-weight: 700; letter-spacing: 0.5px; margin-bottom: 5px; }
+    .stat-value { font-size: 1.6rem; font-weight: 800; color: #333; margin-bottom: 2px; }
+    .stat-player { font-size: 1rem; font-weight: 600; color: #FF4B4B; }
+    .stat-best { border-top: 4px solid #4CAF50; background: linear-gradient(180deg, #fff 0%, #f4fbf4 100%); }
+    .stat-worst { border-top: 4px solid #F44336; background: linear-gradient(180deg, #fff 0%, #fef4f4 100%); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -168,6 +174,113 @@ def calcola_stats_dettagliate(player, log):
             if curr_wr < nem_wr: nem, nem_wr = f"{p} ({curr_wr:.0f}%)", curr_wr
     return {"wr": wr, "best_partner": bp, "nemesis": nem, "totale": totale}
 
+def calcola_stats_mensili(log, elo_hist):
+    if log.empty or 'data' not in log.columns: return {}
+    log_v = log.dropna(subset=['data', 'giocatori', 'vincitori']).copy()
+    if log_v.empty: return {}
+    
+    log_v['mese'] = log_v['data'].dt.to_period('M')
+    mesi = sorted(log_v['mese'].unique(), reverse=True)
+    
+    stats_mensili = {}
+    for m in mesi:
+        df_m = log_v[log_v['mese'] == m]
+        giocatori_mese = set()
+        for gs in df_m['giocatori']:
+            if isinstance(gs, list): giocatori_mese.update(gs)
+            
+        if not giocatori_mese: continue
+        
+        wins_tot = {p: 0 for p in giocatori_mese}
+        wins_2 = {p: 0 for p in giocatori_mese}
+        wins_3 = {p: 0 for p in giocatori_mese}
+        wins_4 = {p: 0 for p in giocatori_mese}
+        punti_tot = {p: 0.0 for p in giocatori_mese}
+        
+        losses_tot = {p: 0 for p in giocatori_mese}
+        losses_2 = {p: 0 for p in giocatori_mese}
+        losses_3 = {p: 0 for p in giocatori_mese}
+        losses_4 = {p: 0 for p in giocatori_mese}
+        punti_lost = {p: 0.0 for p in giocatori_mese}
+        
+        for row in df_m.itertuples():
+            gs = row.giocatori
+            vs = row.vincitori
+            n = row.num_giocatori
+            pts = row.punti_vittoria + row.punti_bonus
+            if not isinstance(gs, list) or not isinstance(vs, list): continue
+            
+            losers = [p for p in gs if p not in vs]
+            
+            for v in vs:
+                if v in giocatori_mese:
+                    wins_tot[v] += 1
+                    punti_tot[v] += pts
+                    if n == 2: wins_2[v] += 1
+                    elif n == 3: wins_3[v] += 1
+                    elif n == 4: wins_4[v] += 1
+            
+            for l in losers:
+                if l in giocatori_mese:
+                    losses_tot[l] += 1
+                    punti_lost[l] += pts
+                    if n == 2: losses_2[l] += 1
+                    elif n == 3: losses_3[l] += 1
+                    elif n == 4: losses_4[l] += 1
+                        
+        elo_gain = {p: 0 for p in giocatori_mese}
+        start_m = m.start_time
+        end_m = m.end_time
+        
+        for p in giocatori_mese:
+            if p in elo_hist:
+                hist = elo_hist[p]
+                elo_before = ELO_STARTING
+                elo_end = ELO_STARTING
+                for record in hist:
+                    r_date = record.get('Date')
+                    if pd.isna(r_date): continue
+                    if r_date < start_m: elo_before = record['Elo']
+                    if r_date <= end_m: elo_end = record['Elo']
+                elo_gain[p] = elo_end - elo_before
+                
+        def get_top(metric_dict, is_float=False, get_min=False):
+            if not metric_dict: return ("N/A", "0")
+            target_val = min(metric_dict.values()) if get_min else max(metric_dict.values())
+            players = [p for p, v in metric_dict.items() if v == target_val]
+            fmt = lambda v: f"{v:.1f}" if is_float else str(v)
+            return (", ".join(players), fmt(target_val))
+            
+        w_tot_b = get_top(wins_tot)
+        w_2_b = get_top(wins_2)
+        w_3_b = get_top(wins_3)
+        w_4_b = get_top(wins_4)
+        pt_tot_b = get_top(punti_tot, is_float=True)
+        elo_b = get_top(elo_gain)
+        
+        l_tot_w = get_top(losses_tot)
+        l_2_w = get_top(losses_2)
+        l_3_w = get_top(losses_3)
+        l_4_w = get_top(losses_4)
+        pt_lost_w = get_top(punti_lost, is_float=True)
+        elo_w = get_top(elo_gain, get_min=True)
+        
+        pt_gain_fmt = (pt_tot_b[0], f"+{pt_tot_b[1]}" if float(pt_tot_b[1]) > 0 else pt_tot_b[1])
+        pt_lost_fmt = (pt_lost_w[0], f"-{pt_lost_w[1]}" if float(pt_lost_w[1]) > 0 else pt_lost_w[1])
+        
+        stats_mensili[m.strftime("%B %Y")] = {
+            "best": {
+                "Overall Wins": w_tot_b, "2P Wins": w_2_b, "3P Wins": w_3_b, 
+                "4P Wins": w_4_b, "Points": pt_gain_fmt, "Elo Gain": (elo_b[0], f"+{elo_b[1]}" if float(elo_b[1])>0 else elo_b[1])
+            },
+            "worst": {
+                "Overall Losses": l_tot_w, "2P Losses": l_2_w, "3P Losses": l_3_w, 
+                "4P Losses": l_4_w, "Points Lost": pt_lost_fmt, "Elo Gain": elo_w
+            }
+        }
+        
+    return stats_mensili
+
 def applica_decadimento(elo_attuale, data_ultima_partita, data_riferimento):
     if pd.isna(data_ultima_partita) or pd.isna(data_riferimento): return elo_attuale
     giorni_passati = (data_riferimento - data_ultima_partita).days
@@ -257,8 +370,8 @@ def ricalcola_classifica():
             for p in gm:
                 last_activity[p] = match_date
                 p_games[p] += 1
-                if p not in elo_hist: elo_hist[p] = [{'GameNum': 0, 'Elo': ELO_STARTING}]
-                elo_hist[p].append({'GameNum': p_games[p], 'Elo': int(round(curr_elo[p]))})
+                if p not in elo_hist: elo_hist[p] = [{'GameNum': 0, 'Elo': ELO_STARTING, 'Date': start_date}]
+                elo_hist[p].append({'GameNum': p_games[p], 'Elo': int(round(curr_elo[p])), 'Date': match_date})
         except Exception: continue
 
     now = datetime.now()
@@ -556,6 +669,59 @@ def main():
                     )
                 else:
                     st.info(f"No match data available for {n}-player matches.")
+
+        st.markdown("---")
+        st.markdown("### 📅 Monthly Statistics")
+        
+        mensili = calcola_stats_mensili(st.session_state.log_partite, st.session_state.elo_history)
+        if mensili:
+            for mese, stats in mensili.items():
+                with st.expander(f"{mese} Overview", expanded=(mese == list(mensili.keys())[0])):
+                    st.markdown("#### 🏆 Best Monthly Performers")
+                    b1, b2, b3 = st.columns(3)
+                    with b1:
+                        p, v = stats['best']['Overall Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">Overall Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b2:
+                        p, v = stats['best']['Points']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">Total Points Gain</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b3:
+                        p, v = stats['best']['Elo Gain']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">Elo Gain</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                        
+                    b4, b5, b6 = st.columns(3)
+                    with b4:
+                        p, v = stats['best']['2P Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">2-Player Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b5:
+                        p, v = stats['best']['3P Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">3-Player Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with b6:
+                        p, v = stats['best']['4P Wins']
+                        st.markdown(f'<div class="stat-card stat-best"><div class="stat-title">4-Player Wins</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+
+                    st.markdown("#### 📉 Worst Monthly Performers")
+                    w1, w2, w3 = st.columns(3)
+                    with w1:
+                        p, v = stats['worst']['Overall Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">Overall Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w2:
+                        p, v = stats['worst']['Points Lost']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">Total Points Lost</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w3:
+                        p, v = stats['worst']['Elo Gain']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">Elo Loss</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                        
+                    w4, w5, w6 = st.columns(3)
+                    with w4:
+                        p, v = stats['worst']['2P Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">2-Player Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w5:
+                        p, v = stats['worst']['3P Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">3-Player Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
+                    with w6:
+                        p, v = stats['worst']['4P Losses']
+                        st.markdown(f'<div class="stat-card stat-worst"><div class="stat-title">4-Player Losses</div><div class="stat-value">{v}</div><div class="stat-player">{p}</div></div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()

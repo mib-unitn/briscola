@@ -281,6 +281,49 @@ def calcola_stats_mensili(log, elo_hist):
         
     return stats_mensili
 
+@st.cache_data
+def calcola_ranking_storico(elo_hist_dict):
+    all_dates = set()
+    for p, hist in elo_hist_dict.items():
+        for r in hist:
+            d = r.get('Date')
+            if pd.notna(d):
+                all_dates.add(pd.Timestamp(d).date())
+                
+    if not all_dates: return pd.DataFrame()
+    
+    sorted_dates = sorted(list(all_dates))
+    
+    player_updates = {}
+    for p, hist in elo_hist_dict.items():
+        daily_elos = {}
+        for r in hist:
+            d = r.get('Date')
+            if pd.notna(d):
+                daily_elos[pd.Timestamp(d).date()] = r['Elo']
+        if daily_elos:
+            player_updates[p] = sorted(daily_elos.items(), key=lambda x: x[0])
+            
+    timeline_data = []
+    current_elos = {}
+    
+    for d in sorted_dates:
+        for p, updates in player_updates.items():
+            for ud, ue in updates:
+                if ud == d:
+                    current_elos[p] = ue
+                elif ud > d: break
+                    
+        sorted_players = sorted(current_elos.items(), key=lambda x: x[1], reverse=True)
+        for rank, (p, e) in enumerate(sorted_players, start=1):
+            timeline_data.append({
+                'Date': str(d),
+                'Player': p,
+                'Rank': rank
+            })
+            
+    return pd.DataFrame(timeline_data)
+
 def applica_decadimento(elo_attuale, data_ultima_partita, data_riferimento):
     if pd.isna(data_ultima_partita) or pd.isna(data_riferimento): return elo_attuale
     giorni_passati = (data_riferimento - data_ultima_partita).days
@@ -609,6 +652,24 @@ def main():
                     ymin, ymax = (df_chart['Elo'].min()-20, df_chart['Elo'].max()+20)
                     chart = alt.Chart(df_chart).mark_line(point=True, strokeWidth=3).encode(x=alt.X('Match'), y=alt.Y('Elo', scale=alt.Scale(domain=[ymin, ymax])), color='Player', tooltip=['Player', 'Match', 'Elo']).interactive()
                     st.altair_chart(chart, use_container_width=True)
+                    
+            st.markdown("---")
+            st.markdown("### 🏆 Daily Ranking History")
+            sel_rank_pl = st.multiselect("Compare Players (Ranking)", lista_attuale, default=top_pl, key="ms_rank")
+            if sel_rank_pl:
+                df_rank = calcola_ranking_storico(st.session_state.elo_history)
+                if not df_rank.empty:
+                    df_rank_filt = df_rank[df_rank['Player'].isin(sel_rank_pl)]
+                    if not df_rank_filt.empty:
+                        max_rank = df_rank_filt['Rank'].max()
+                        rank_chart = alt.Chart(df_rank_filt).mark_line(point=True, strokeWidth=3).encode(
+                            x=alt.X('Date:T', title="Date"),
+                            y=alt.Y('Rank:Q', scale=alt.Scale(domain=[max_rank + 0.5, 0.5]), 
+                                    axis=alt.Axis(tickMinStep=1, format="d")),
+                            color='Player:N',
+                            tooltip=['Player', 'Date', 'Rank']
+                        ).interactive()
+                        st.altair_chart(rank_chart, use_container_width=True)
 
         with c2:
             st.markdown("### 🕵️ Player Insights")

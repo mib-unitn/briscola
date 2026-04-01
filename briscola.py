@@ -354,13 +354,13 @@ def ricalcola_classifica():
         return
 
     log_val = log.dropna(subset=['giocatori', 'vincitori', 'data'])
-    df['PG'].update(log_val['giocatori'].explode().value_counts())
+    df.update(pd.DataFrame({'PG': log_val['giocatori'].explode().value_counts()}))
     
     for n_players in [2, 3, 4]:
         col_pg = f'PG{n_players}'
         sub_log = log_val[log_val['num_giocatori'] == n_players]
         if not sub_log.empty:
-            df[col_pg].update(sub_log['giocatori'].explode().value_counts())
+            df.update(pd.DataFrame({col_pg: sub_log['giocatori'].explode().value_counts()}))
 
     for row in log_val.itertuples():
         col_v = f'V{int(row.num_giocatori)}'
@@ -552,7 +552,7 @@ def main():
         pwd = st.text_input("Admin Password", type="password", key="pwd_write")
         
         # USO DI ON_CLICK PER EVITARE L'ERRORE STREAMLITAPIEXCEPTION
-        st.button("💾 Save Match", use_container_width=True, type="primary", 
+        st.button("💾 Save Match", width="stretch", type="primary", 
                   on_click=callback_salva_partita, 
                   args=(gs, vs, bonus, pwd))
 
@@ -575,7 +575,7 @@ def main():
 
         st.markdown("---")
         with st.expander("🗑️ Delete Last Match"):
-            if st.button("Confirm Delete", use_container_width=True):
+            if st.button("Confirm Delete", width="stretch"):
                 if pwd == st.secrets["credentials"]["password"]:
                     if not st.session_state.log_partite.empty:
                         st.session_state.log_partite = st.session_state.log_partite.sort_values('data').iloc[:-1]
@@ -626,7 +626,7 @@ def main():
 
         st.dataframe(
             df_show,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_order=["Rank", "Giocatore", "Elo", "PG", "PT", "MPP", "UltimaPartita"],
             column_config={
@@ -654,7 +654,7 @@ def main():
                     df_chart = pd.DataFrame(all_data)
                     ymin, ymax = (df_chart['Elo'].min()-20, df_chart['Elo'].max()+20)
                     chart = alt.Chart(df_chart).mark_line(point=True, strokeWidth=3).encode(x=alt.X('Match'), y=alt.Y('Elo', scale=alt.Scale(domain=[ymin, ymax])), color='Player', tooltip=['Player', 'Match', 'Elo']).interactive()
-                    st.altair_chart(chart, use_container_width=True)
+                    st.altair_chart(chart, width="stretch")
                     
             st.markdown("---")
             st.markdown("### 🏆 Daily Ranking History")
@@ -672,7 +672,7 @@ def main():
                             color='Player:N',
                             tooltip=['Player', 'Date', 'Rank']
                         ).interactive()
-                        st.altair_chart(rank_chart, use_container_width=True)
+                        st.altair_chart(rank_chart, width="stretch")
 
         with c2:
             st.markdown("### 🕵️ Player Insights")
@@ -688,7 +688,7 @@ def main():
     # --- TAB 3: LOG ---
     with tab3:
         if not st.session_state.log_partite.empty:
-            st.dataframe(st.session_state.log_partite.sort_values('data', ascending=False), use_container_width=True, hide_index=True, column_config={"data": st.column_config.DatetimeColumn("Timestamp", format="DD/MM/YY HH:mm")})
+            st.dataframe(st.session_state.log_partite.sort_values('data', ascending=False), width="stretch", hide_index=True, column_config={"data": st.column_config.DatetimeColumn("Timestamp", format="DD/MM/YY HH:mm")})
 
     # --- TAB 4: STATISTICS ---
     with tab4:
@@ -721,7 +721,7 @@ def main():
                     
                     st.dataframe(
                         df_mode,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_order=["Rank", "Giocatore", f"PG{n}", f"V{n}", "WR", "Elo", "UltimaPartita"],
                         column_config={

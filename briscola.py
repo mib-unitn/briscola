@@ -616,7 +616,10 @@ def main():
         col_filter, _ = st.columns([1, 2])
         with col_filter:
             max_pg_slider = int(df_active['PG'].max()) if not df_active.empty else 0
-            min_pg = st.slider("Filter by Min. Matches", 0, max_pg_slider, 2)
+            if max_pg_slider > 0:
+                min_pg = st.slider("Filter by Min. Matches", 0, max_pg_slider, min(2, max_pg_slider))
+            else:
+                min_pg = 0
         
         df_show = df_active[df_active['PG'] >= min_pg].sort_values(["Elo", "PG"], ascending=[False, True])
         df_show.insert(0, 'Rank', range(1, 1 + len(df_show)))
@@ -697,9 +700,12 @@ def main():
             if not df_active.empty and 'PG2' in df_active.columns:
                 max_stat_pg = int(df_active[['PG2', 'PG3', 'PG4']].fillna(0).max().max())
             
-            # Prevent slider error if max value is strictly smaller than the default value 2
-            slider_default = min(10, max_stat_pg) 
-            min_pg_stat = st.slider("Filter by Min. Category Matches", 0, max_stat_pg, slider_default)
+            if max_stat_pg > 0:
+                # Prevent slider error if max value is strictly smaller than the default value 2
+                slider_default = min(10, max_stat_pg) 
+                min_pg_stat = st.slider("Filter by Min. Category Matches", 0, max_stat_pg, slider_default)
+            else:
+                min_pg_stat = 0
             
         # st.markdown("<br>", unsafe_allow_html=True)
         

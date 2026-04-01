@@ -354,13 +354,16 @@ def ricalcola_classifica():
         return
 
     log_val = log.dropna(subset=['giocatori', 'vincitori', 'data'])
-    df.update(pd.DataFrame({'PG': log_val['giocatori'].explode().value_counts()}))
+    
+    pg_counts = log_val['giocatori'].explode().value_counts()
+    df['PG'] = df.index.map(pg_counts).fillna(0)
     
     for n_players in [2, 3, 4]:
         col_pg = f'PG{n_players}'
         sub_log = log_val[log_val['num_giocatori'] == n_players]
         if not sub_log.empty:
-            df.update(pd.DataFrame({col_pg: sub_log['giocatori'].explode().value_counts()}))
+            sub_counts = sub_log['giocatori'].explode().value_counts()
+            df[col_pg] = df.index.map(sub_counts).fillna(0)
 
     for row in log_val.itertuples():
         col_v = f'V{int(row.num_giocatori)}'
